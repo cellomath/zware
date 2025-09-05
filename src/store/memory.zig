@@ -1,27 +1,25 @@
 const std = @import("std");
 const mem = std.mem;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 pub const MAX_PAGES = 64 * 1024;
 pub const PAGE_SIZE = 64 * 1024;
 
 pub const Memory = struct {
-    alloc: mem.Allocator,
     min: u32,
     max: ?u32 = null,
-    data: ArrayList(u8),
+    data: ArrayListUnmanaged(u8),
 
-    pub fn init(alloc: mem.Allocator, min: u32, max: ?u32) Memory {
+    pub fn init(min: u32, max: ?u32) Memory {
         return Memory{
-            .alloc = alloc,
-            .data = ArrayList(u8).init(alloc),
+            .data = ArrayListUnmanaged(u8).empty,
             .min = min,
             .max = max,
         };
     }
 
-    pub fn deinit(self: *Memory) void {
-        self.data.deinit();
+    pub fn deinit(self: *Memory, alloc: mem.Allocator) void {
+        self.data.deinit(alloc);
     }
 
     // Return the size of the memory (in pages)
@@ -36,12 +34,12 @@ pub const Memory = struct {
         return @truncate(self.data.items.len);
     }
 
-    pub fn grow(self: *Memory, num_pages: u32) !usize {
+    pub fn grow(self: *Memory, alloc: mem.Allocator, num_pages: u32) !usize {
         if (self.size() + num_pages > @min(self.max orelse MAX_PAGES, MAX_PAGES)) return error.OutOfBoundsMemoryAccess;
 
         const old_size_in_bytes = self.data.items.len;
         const old_size_in_pages = self.size();
-        _ = try self.data.resize(self.data.items.len + PAGE_SIZE * num_pages);
+        _ = try self.data.resize(alloc, self.data.items.len + PAGE_SIZE * num_pages);
 
         // Zero memory. FIXME: I don't think this is required (maybe do this only in debug build)
         @memset(self.data.items[old_size_in_bytes .. old_size_in_bytes + PAGE_SIZE * num_pages], 0);
@@ -131,14 +129,14 @@ pub const Memory = struct {
 
 const testing = std.testing;
 test "Memory test" {
-    const ArrayListStore = @import("../store.zig").ArrayListStore;
+    const ArrayListUnmanagedStore = @import("../store.zig").ArrayListUnmanagedStore;
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer _ = arena.deinit();
 
     const alloc = arena.allocator();
 
-    var store = ArrayListStore.init(alloc);
+    var store = ArrayListUnmanagedStore.init();
     const mem_handle = try store.addMemory(0, null);
     var mem0 = try store.memory(mem_handle);
     try testing.expectEqual(@as(usize, 0), mem0.sizeBytes());

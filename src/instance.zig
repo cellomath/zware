@@ -3,10 +3,10 @@ const mem = std.mem;
 const math = std.math;
 const posix = std.posix;
 const wasi = std.os.wasi;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Error = @import("error.zig").Error;
 const Module = @import("module.zig").Module;
-const Store = @import("store.zig").ArrayListStore;
+const Store = @import("store.zig").ArrayListUnmanagedStore;
 const Function = @import("store/function.zig").Function;
 const Memory = @import("store/memory.zig").Memory;
 const Table = @import("store/table.zig").Table;
@@ -35,13 +35,13 @@ const VirtualMachineOptions = struct {
 pub const Instance = struct {
     module: Module,
     store: *Store,
-    funcaddrs: ArrayList(usize),
-    memaddrs: ArrayList(usize),
-    tableaddrs: ArrayList(usize),
-    globaladdrs: ArrayList(usize),
+    funcaddrs: ArrayListUnmanaged(usize),
+    memaddrs: ArrayListUnmanaged(usize),
+    tableaddrs: ArrayListUnmanaged(usize),
+    globaladdrs: ArrayListUnmanaged(usize),
     // TODO: exports (this was in 1.0...why didn't we need it)
-    elemaddrs: ArrayList(usize),
-    dataaddrs: ArrayList(usize),
+    elemaddrs: ArrayListUnmanaged(usize),
+    dataaddrs: ArrayListUnmanaged(usize),
 
     // wasi-specific fields
     //
@@ -56,23 +56,23 @@ pub const Instance = struct {
     // it executes; an arbitrary `inst` will not contain the correct
     // data.
     wasi_preopens: std.AutoHashMap(wasi.fd_t, WasiPreopen),
-    wasi_args: std.ArrayList([:0]u8),
+    wasi_args: std.ArrayListUnmanaged([:0]u8),
     wasi_env: std.StringHashMap([]const u8),
 
-    pub fn init(alloc: mem.Allocator, store: *Store, module: Module) Instance {
+    pub fn init(store: *Store, module: Module) Instance {
         return Instance{
             .module = module,
             .store = store,
-            .funcaddrs = ArrayList(usize).init(alloc),
-            .memaddrs = ArrayList(usize).init(alloc),
-            .tableaddrs = ArrayList(usize).init(alloc),
-            .globaladdrs = ArrayList(usize).init(alloc),
-            .elemaddrs = ArrayList(usize).init(alloc),
-            .dataaddrs = ArrayList(usize).init(alloc),
+            .funcaddrs = ArrayListUnmanaged(usize).empty,
+            .memaddrs = ArrayListUnmanaged(usize).empty,
+            .tableaddrs = ArrayListUnmanaged(usize).empty,
+            .globaladdrs = ArrayListUnmanaged(usize).empty,
+            .elemaddrs = ArrayListUnmanaged(usize).empty,
+            .dataaddrs = ArrayListUnmanaged(usize).empty,
 
-            .wasi_preopens = std.AutoHashMap(wasi.fd_t, WasiPreopen).init(alloc),
-            .wasi_args = ArrayList([:0]u8).init(alloc),
-            .wasi_env = std.StringHashMap([]const u8).init(alloc),
+            .wasi_preopens = std.AutoHashMap(wasi.fd_t, WasiPreopen).empty,
+            .wasi_args = ArrayListUnmanaged([:0]u8).empty,
+            .wasi_env = std.StringHashMap([]const u8).empty,
         };
     }
 
@@ -139,32 +139,32 @@ pub const Instance = struct {
         };
     }
 
-    pub fn instantiateWithError(self: *Instance, err: *Error) !void {
+    pub fn instantiateWithError(self: *Instance, alloc: mem.Allocator, err: *Error) !void {
         if (self.module.decoded == false) return error.ModuleNotDecoded;
 
-        try self.instantiateImports(err);
-        try self.instantiateFunctions();
-        try self.instantiateGlobals();
-        try self.instantiateMemories();
-        try self.instantiateTables();
-        try self.instantiateData();
-        try self.instantiateElements();
+        try self.instantiateImports(alloc, err);
+        try self.instantiateFunctions(alloc);
+        try self.instantiateGlobals(alloc);
+        try self.instantiateMemories(alloc);
+        try self.instantiateTables(alloc);
+        try self.instantiateData(alloc);
+        try self.instantiateElements(alloc);
 
         if (self.module.start) |start_function| {
             try self.invokeStart(start_function, .{});
         }
     }
 
-    fn instantiateImports(self: *Instance, err: *Error) error{ OutOfMemory, SeeContext }!void {
+    fn instantiateImports(self: *Instance, alloc: mem.Allocator, err: *Error) error{ OutOfMemory, SeeContext }!void {
         for (self.module.imports.list.items) |import| {
             const import_handle = self.store.import(import.module, import.name, import.desc_tag) catch |e| switch (e) {
                 error.ImportNotFound => return err.set(.{ .missing_import = import }),
             };
             switch (import.desc_tag) {
-                .Func => try self.funcaddrs.append(import_handle),
-                .Mem => try self.memaddrs.append(import_handle),
-                .Table => try self.tableaddrs.append(import_handle),
-                .Global => try self.globaladdrs.append(import_handle),
+                .Func => try self.funcaddrs.append(alloc, import_handle),
+                .Mem => try self.memaddrs.append(alloc, import_handle),
+                .Table => try self.tableaddrs.append(alloc, import_handle),
+                .Global => try self.globaladdrs.append(alloc, import_handle),
             }
         }
     }
@@ -194,7 +194,7 @@ pub const Instance = struct {
                 const func = try self.module.functions.lookup(i);
                 const functype = try self.module.types.lookup(func.typeidx);
 
-                const handle = try self.store.addFunction(Function{
+                const handle = try self.store.addFunction(alloc, Function{
                     .params = functype.params,
                     .results = functype.results,
                     .subtype = .{
@@ -473,7 +473,7 @@ pub const Instance = struct {
         const args = try std.process.argsAlloc(alloc);
 
         for (args) |arg| {
-            try self.wasi_args.append(arg);
+            try self.wasi_args.append(alloc, arg);
         }
 
         return args;

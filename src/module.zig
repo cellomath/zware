@@ -3,7 +3,7 @@ const mem = std.mem;
 const leb = std.leb;
 const math = std.math;
 const unicode = std.unicode;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Rr = @import("rr.zig").Rr;
 const RrOpcode = @import("rr.zig").RrOpcode;
 const Instance = @import("instance.zig").Instance;
@@ -15,7 +15,6 @@ const RefType = @import("valtype.zig").RefType;
 
 pub const Module = struct {
     decoded: bool = false,
-    alloc: mem.Allocator,
     wasm_bin: []const u8,
     customs: Section(Custom),
     types: Section(FuncType),
@@ -31,56 +30,55 @@ pub const Module = struct {
     start: ?u32 = null,
     function_index_start: ?usize = null,
     data_count: ?u32 = null,
-    element_init_offsets: ArrayList(usize),
-    parsed_code: ArrayList(Rr),
-    local_types: ArrayList(LocalType),
-    br_table_indices: ArrayList(u32),
-    references: ArrayList(u32),
+    element_init_offsets: ArrayListUnmanaged(usize),
+    parsed_code: ArrayListUnmanaged(Rr),
+    local_types: ArrayListUnmanaged(LocalType),
+    br_table_indices: ArrayListUnmanaged(u32),
+    references: ArrayListUnmanaged(u32),
 
-    pub fn init(alloc: mem.Allocator, wasm_bin: []const u8) Module {
+    pub fn init(wasm_bin: []const u8) Module {
         return Module{
-            .alloc = alloc,
             .wasm_bin = wasm_bin,
-            .customs = Section(Custom).init(alloc),
-            .types = Section(FuncType).init(alloc),
-            .imports = Section(Import).init(alloc),
-            .functions = Section(Function).init(alloc),
-            .tables = Section(TableType).init(alloc),
-            .memories = Section(MemType).init(alloc),
-            .globals = Section(GlobalType).init(alloc),
-            .exports = Section(Export).init(alloc),
-            .elements = Section(ElementSegment).init(alloc),
-            .codes = Section(Code).init(alloc),
-            .datas = Section(DataSegment).init(alloc),
-            .element_init_offsets = ArrayList(usize).init(alloc),
-            .parsed_code = ArrayList(Rr).init(alloc),
-            .local_types = ArrayList(LocalType).init(alloc),
-            .br_table_indices = ArrayList(u32).init(alloc),
-            .references = ArrayList(u32).init(alloc),
+            .customs = Section(Custom).empty,
+            .types = Section(FuncType).empty,
+            .imports = Section(Import).empty,
+            .functions = Section(Function).empty,
+            .tables = Section(TableType).empty,
+            .memories = Section(MemType).empty,
+            .globals = Section(GlobalType).empty,
+            .exports = Section(Export).empty,
+            .elements = Section(ElementSegment).empty,
+            .codes = Section(Code).empty,
+            .datas = Section(DataSegment).empty,
+            .element_init_offsets = ArrayListUnmanaged(usize).empty,
+            .parsed_code = ArrayListUnmanaged(Rr).empty,
+            .local_types = ArrayListUnmanaged(LocalType).empty,
+            .br_table_indices = ArrayListUnmanaged(u32).empty,
+            .references = ArrayListUnmanaged(u32).empty,
         };
     }
 
-    pub fn deinit(self: *Module) void {
-        defer self.customs.deinit();
-        defer self.types.deinit();
-        defer self.imports.deinit();
-        defer self.functions.deinit();
-        defer self.tables.deinit();
-        defer self.memories.deinit();
-        defer self.globals.deinit();
-        defer self.exports.deinit();
-        defer self.elements.deinit();
-        defer self.codes.deinit();
-        defer self.datas.deinit();
+    pub fn deinit(self: *Module, alloc: mem.Allocator) void {
+        defer self.customs.deinit(alloc);
+        defer self.types.deinit(alloc);
+        defer self.imports.deinit(alloc);
+        defer self.functions.deinit(alloc);
+        defer self.tables.deinit(alloc);
+        defer self.memories.deinit(alloc);
+        defer self.globals.deinit(alloc);
+        defer self.exports.deinit(alloc);
+        defer self.elements.deinit(alloc);
+        defer self.codes.deinit(alloc);
+        defer self.datas.deinit(alloc);
 
-        defer self.element_init_offsets.deinit();
-        defer self.parsed_code.deinit();
-        defer self.local_types.deinit();
-        defer self.br_table_indices.deinit();
-        defer self.references.deinit();
+        defer self.element_init_offsets.deinit(alloc);
+        defer self.parsed_code.deinit(alloc);
+        defer self.local_types.deinit(alloc);
+        defer self.br_table_indices.deinit(alloc);
+        defer self.references.deinit(alloc);
     }
 
-    pub fn decode(self: *Module) !void {
+    pub fn decode(self: *Module, alloc: mem.Allocator) !void {
         if (self.decoded) return error.AlreadyDecoded;
         var decoder = Decoder{
             .fbs = .{ .pos = 0, .buffer = self.wasm_bin },
@@ -97,7 +95,7 @@ pub const Module = struct {
         // Push an initial return instruction so we don't have to
         // track the end of a function to use its return on invoke
         // See https://github.com/malcolmstill/zware/pull/133
-        try self.parsed_code.append(.@"return");
+        try self.parsed_code.append(alloc, .@"return");
 
         var i: usize = 0;
         while (true) : (i += 1) {
@@ -150,7 +148,7 @@ pub const Module = struct {
 pub const Decoder = struct {
     fbs: std.io.FixedBufferStream([]const u8),
 
-    pub fn decodeSection(self: *Decoder, module: *Module) !void {
+    pub fn decodeSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const id: SectionType = self.readEnum(SectionType) catch |err| switch (err) {
             error.EndOfStream => return error.WasmFileEnd,
             else => return err,
@@ -161,18 +159,18 @@ pub const Decoder = struct {
         const section_start = self.fbs.pos;
 
         switch (id) {
-            .Custom => try self.decodeCustomSection(module, size),
-            .Type => try self.decodeTypeSection(module),
-            .Import => try self.decodeImportSection(module),
-            .Function => try self.decodeFunctionSection(module),
-            .Table => try self.decodeTableSection(module),
-            .Memory => try self.decodeMemorySection(module),
-            .Global => try self.decodeGlobalSection(module),
-            .Export => try self.decodeExportSection(module),
-            .Start => try self.decodeStartSection(module),
-            .Element => try self.decodeElementSection(module),
-            .Code => try self.decodeCodeSection(module),
-            .Data => try self.decodeDataSection(module),
+            .Custom => try self.decodeCustomSection(alloc, module, size),
+            .Type => try self.decodeTypeSection(alloc, module),
+            .Import => try self.decodeImportSection(alloc, module),
+            .Function => try self.decodeFunctionSection(alloc, module),
+            .Table => try self.decodeTableSection(alloc, module),
+            .Memory => try self.decodeMemorySection(alloc, module),
+            .Global => try self.decodeGlobalSection(alloc, module),
+            .Export => try self.decodeExportSection(alloc, module),
+            .Start => try self.decodeStartSection(alloc, module),
+            .Element => try self.decodeElementSection(alloc, module),
+            .Code => try self.decodeCodeSection(alloc, module),
+            .Data => try self.decodeDataSection(alloc, module),
             .DataCount => try self.decodeDataCountSection(module, size),
         }
 
@@ -180,7 +178,7 @@ pub const Decoder = struct {
         if (section_end - section_start != size) return error.MalformedSectionMismatchedSize;
     }
 
-    fn decodeTypeSection(self: *Decoder, module: *Module) !void {
+    fn decodeTypeSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.types.count = count;
 
@@ -220,14 +218,14 @@ pub const Decoder = struct {
             results_valtype.ptr = @ptrCast(results.ptr);
             results_valtype.len = results.len;
 
-            try module.types.list.append(FuncType{
+            try module.types.list.append(alloc, FuncType{
                 .params = params_valtype,
                 .results = results_valtype,
             });
         }
     }
 
-    fn decodeImportSection(self: *Decoder, module: *Module) !void {
+    fn decodeImportSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.imports.count = count;
 
@@ -254,7 +252,7 @@ pub const Decoder = struct {
                 .Global => try self.decodeGlobal(module, import_index),
             };
 
-            try module.imports.list.append(Import{
+            try module.imports.list.append(alloc, Import{
                 .module = module_name,
                 .name = name,
                 .desc_tag = tag,
@@ -262,17 +260,17 @@ pub const Decoder = struct {
         }
     }
 
-    fn decodeFunctionSection(self: *Decoder, module: *Module) !void {
+    fn decodeFunctionSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.functions.count = count;
 
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            try self.decodeFunction(module, null);
+            try self.decodeFunction(alloc, module, null);
         }
     }
 
-    fn decodeFunction(self: *Decoder, module: *Module, import: ?u32) !void {
+    fn decodeFunction(self: *Decoder, alloc: mem.Allocator, module: *Module, import: ?u32) !void {
         const typeidx = try self.readLEB128(u32);
 
         if (typeidx >= module.types.list.items.len) return error.ValidatorInvalidTypeIndex;
@@ -281,23 +279,23 @@ pub const Decoder = struct {
             module.function_index_start = module.functions.list.items.len;
         }
 
-        try module.functions.list.append(Function{
+        try module.functions.list.append(alloc, Function{
             .typeidx = typeidx,
             .import = import,
         });
     }
 
-    fn decodeTableSection(self: *Decoder, module: *Module) !void {
+    fn decodeTableSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.tables.count = count;
 
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            try self.decodeTable(module, null);
+            try self.decodeTable(alloc, module, null);
         }
     }
 
-    fn decodeTable(self: *Decoder, module: *Module, import: ?u32) !void {
+    fn decodeTable(self: *Decoder, alloc: mem.Allocator, module: *Module, import: ?u32) !void {
         const reftype = try self.readEnum(RefType);
         const limit_type = try self.readEnum(LimitType);
         const min = try self.readLEB128(u32);
@@ -311,7 +309,7 @@ pub const Decoder = struct {
                 },
             }
         };
-        try module.tables.list.append(TableType{
+        try module.tables.list.append(alloc, TableType{
             .import = import,
             .reftype = reftype,
             .limits = Limit{
@@ -321,17 +319,17 @@ pub const Decoder = struct {
         });
     }
 
-    fn decodeMemorySection(self: *Decoder, module: *Module) !void {
+    fn decodeMemorySection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.memories.count = count;
 
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            try self.decodeMemory(module, null);
+            try self.decodeMemory(alloc, module, null);
         }
     }
 
-    fn decodeMemory(self: *Decoder, module: *Module, import: ?u32) !void {
+    fn decodeMemory(self: *Decoder, alloc: mem.Allocator, module: *Module, import: ?u32) !void {
         if (module.memories.list.items.len > 0) return error.ValidatorMultipleMemories;
 
         const limit_type = try self.readEnum(LimitType);
@@ -348,7 +346,7 @@ pub const Decoder = struct {
                 },
             }
         };
-        try module.memories.list.append(MemType{
+        try module.memories.list.append(alloc, MemType{
             .import = import,
             .limits = Limit{
                 .min = min,
@@ -357,17 +355,17 @@ pub const Decoder = struct {
         });
     }
 
-    fn decodeGlobalSection(self: *Decoder, module: *Module) !void {
+    fn decodeGlobalSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.globals.count = count;
 
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            try self.decodeGlobal(module, null);
+            try self.decodeGlobal(alloc, module, null);
         }
     }
 
-    fn decodeGlobal(self: *Decoder, module: *Module, import: ?u32) !void {
+    fn decodeGlobal(self: *Decoder, alloc: mem.Allocator, module: *Module, import: ?u32) !void {
         const global_type = try self.readEnum(ValType);
         const mutability = try self.readEnum(Mutability);
 
@@ -376,13 +374,13 @@ pub const Decoder = struct {
         // If we're not importing the global we will expect
         // an expression
         if (import == null) {
-            parsed_code = try self.readConstantExpression(module, global_type);
+            parsed_code = try self.readConstantExpression(alloc, module, global_type);
         }
 
         if (parsed_code == null and import == null) return error.ExpectedOneOrTheOther;
         if (parsed_code != null and import != null) return error.ExpectedOneOrTheOther;
 
-        try module.globals.list.append(GlobalType{
+        try module.globals.list.append(alloc, GlobalType{
             .valtype = global_type,
             .mutability = mutability,
             .start = if (parsed_code) |pc| pc.start else null,
@@ -390,7 +388,7 @@ pub const Decoder = struct {
         });
     }
 
-    fn decodeExportSection(self: *Decoder, module: *Module) !void {
+    fn decodeExportSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.exports.count = count;
 
@@ -411,14 +409,14 @@ pub const Decoder = struct {
             switch (tag) {
                 .Func => {
                     if (index >= module.functions.list.items.len) return error.ValidatorExportUnknownFunction;
-                    try module.references.append(index);
+                    try module.references.append(alloc, index);
                 },
                 .Table => if (index >= module.tables.list.items.len) return error.ValidatorExportUnknownTable,
                 .Mem => if (index >= module.memories.list.items.len) return error.ValidatorExportUnknownMemory,
                 .Global => if (index >= module.globals.list.items.len) return error.ValidatorExportUnknownGlobal,
             }
 
-            try module.exports.list.append(Export{
+            try module.exports.list.append(alloc, Export{
                 .name = name,
                 .tag = tag,
                 .index = index,
@@ -438,7 +436,7 @@ pub const Decoder = struct {
         module.start = funcidx;
     }
 
-    fn decodeElementSection(self: *Decoder, module: *Module) !void {
+    fn decodeElementSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.elements.count = count;
 
@@ -451,7 +449,7 @@ pub const Decoder = struct {
                     const tableidx = 0;
                     if (tableidx >= module.tables.list.items.len) return error.ValidatorElemUnknownTable;
 
-                    const parsed_offset_code = try self.readConstantExpression(module, .I32);
+                    const parsed_offset_code = try self.readConstantExpression(alloc, module, .I32);
 
                     const data_length = try self.readLEB128(u32);
 
@@ -463,15 +461,15 @@ pub const Decoder = struct {
 
                         if (funcidx >= module.functions.list.items.len) return error.ValidatorElemUnknownFunctionIndex;
 
-                        try module.references.append(funcidx);
+                        try module.references.append(alloc, funcidx);
 
                         const init_offset = module.parsed_code.items.len;
-                        try module.parsed_code.append(Rr{ .@"ref.func" = funcidx });
-                        try module.parsed_code.append(Rr.@"return");
-                        try module.element_init_offsets.append(init_offset);
+                        try module.parsed_code.append(alloc, Rr{ .@"ref.func" = funcidx });
+                        try module.parsed_code.append(alloc, Rr.@"return");
+                        try module.element_init_offsets.append(alloc, init_offset);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = .FuncRef,
                         .init = first_init_offset,
                         .count = data_length,
@@ -494,15 +492,15 @@ pub const Decoder = struct {
 
                         if (funcidx >= module.functions.list.items.len) return error.ValidatorElemUnknownFunctionIndex;
 
-                        try module.references.append(funcidx);
+                        try module.references.append(alloc, funcidx);
 
                         const init_offset = module.parsed_code.items.len;
-                        try module.parsed_code.append(Rr{ .@"ref.func" = funcidx });
-                        try module.parsed_code.append(Rr.@"return");
-                        try module.element_init_offsets.append(init_offset);
+                        try module.parsed_code.append(alloc, Rr{ .@"ref.func" = funcidx });
+                        try module.parsed_code.append(alloc, Rr.@"return");
+                        try module.element_init_offsets.append(alloc, init_offset);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = .FuncRef,
                         .init = first_init_offset,
                         .count = data_length,
@@ -514,7 +512,7 @@ pub const Decoder = struct {
 
                     if (tableidx >= module.tables.list.items.len) return error.ValidatorElemUnknownTable;
 
-                    const parsed_offset_code = try self.readConstantExpression(module, .I32);
+                    const parsed_offset_code = try self.readConstantExpression(alloc, module, .I32);
 
                     _ = try self.readEnum(ElemKind);
                     const data_length = try self.readLEB128(u32);
@@ -527,15 +525,15 @@ pub const Decoder = struct {
 
                         if (funcidx >= module.functions.list.items.len) return error.ValidatorElemUnknownFunctionIndex;
 
-                        try module.references.append(funcidx);
+                        try module.references.append(alloc, funcidx);
 
                         const init_offset = module.parsed_code.items.len;
-                        try module.parsed_code.append(Rr{ .@"ref.func" = funcidx });
-                        try module.parsed_code.append(Rr.@"return");
-                        try module.element_init_offsets.append(init_offset);
+                        try module.parsed_code.append(alloc, Rr{ .@"ref.func" = funcidx });
+                        try module.parsed_code.append(alloc, Rr.@"return");
+                        try module.element_init_offsets.append(alloc, init_offset);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = .FuncRef,
                         .init = first_init_offset,
                         .count = data_length,
@@ -557,15 +555,15 @@ pub const Decoder = struct {
 
                         if (funcidx >= module.functions.list.items.len) return error.ValidatorElemUnknownFunctionIndex;
 
-                        try module.references.append(funcidx);
+                        try module.references.append(alloc, funcidx);
 
                         const init_offset = module.parsed_code.items.len;
-                        try module.parsed_code.append(Rr{ .@"ref.func" = funcidx });
-                        try module.parsed_code.append(Rr.@"return");
-                        try module.element_init_offsets.append(init_offset);
+                        try module.parsed_code.append(alloc, Rr{ .@"ref.func" = funcidx });
+                        try module.parsed_code.append(alloc, Rr.@"return");
+                        try module.element_init_offsets.append(alloc, init_offset);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = .FuncRef,
                         .init = first_init_offset,
                         .count = data_length,
@@ -576,7 +574,7 @@ pub const Decoder = struct {
                     const tableidx = 0;
                     if (tableidx >= module.tables.list.items.len) return error.ValidatorElemUnknownTable;
 
-                    const parsed_offset_code = try self.readConstantExpression(module, .I32);
+                    const parsed_offset_code = try self.readConstantExpression(alloc, module, .I32);
 
                     const init_expression_count = try self.readLEB128(u32);
 
@@ -584,11 +582,11 @@ pub const Decoder = struct {
 
                     var j: usize = 0;
                     while (j < init_expression_count) : (j += 1) {
-                        const parsed_init_code = try self.readConstantExpression(module, .FuncRef);
-                        try module.element_init_offsets.append(parsed_init_code.start);
+                        const parsed_init_code = try self.readConstantExpression(alloc, module, .FuncRef);
+                        try module.element_init_offsets.append(alloc, parsed_init_code.start);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = .FuncRef,
                         .init = first_init_offset,
                         .count = init_expression_count,
@@ -607,11 +605,11 @@ pub const Decoder = struct {
                     var j: usize = 0;
                     while (j < expr_count) : (j += 1) {
                         const init_offset = module.parsed_code.items.len;
-                        _ = try self.readConstantExpression(module, .FuncRef);
-                        try module.element_init_offsets.append(init_offset);
+                        _ = try self.readConstantExpression(alloc, module, .FuncRef);
+                        try module.element_init_offsets.append(alloc, init_offset);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = reftype,
                         .init = first_init_offset,
                         .count = expr_count,
@@ -626,11 +624,11 @@ pub const Decoder = struct {
 
                     var j: usize = 0;
                     while (j < expr_count) : (j += 1) {
-                        const parsed_init_code = try self.readConstantExpression(module, .FuncRef);
-                        try module.element_init_offsets.append(parsed_init_code.start);
+                        const parsed_init_code = try self.readConstantExpression(alloc, module, .FuncRef);
+                        try module.element_init_offsets.append(alloc, parsed_init_code.start);
                     }
 
-                    try module.elements.list.append(ElementSegment{
+                    try module.elements.list.append(alloc, ElementSegment{
                         .reftype = reftype,
                         .init = first_init_offset,
                         .count = expr_count,
@@ -649,11 +647,11 @@ pub const Decoder = struct {
         module.data_count = try self.readLEB128(u32);
     }
 
-    fn decodeCodeSection(self: *Decoder, module: *Module) !void {
+    fn decodeCodeSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
         module.codes.count = count;
 
-        try module.parsed_code.ensureTotalCapacity(count * 32);
+        try module.parsed_code.ensureTotalCapacity(alloc, count * 32);
 
         if (count == 0) return;
 
@@ -676,16 +674,16 @@ pub const Decoder = struct {
                 const local_type = try self.readEnum(ValType);
                 locals_count += type_count;
 
-                try module.local_types.append(.{ .count = type_count, .valtype = local_type });
+                try module.local_types.append(alloc, .{ .count = type_count, .valtype = local_type });
             }
             if (locals_count >= 0x100000000) return error.TooManyLocals;
 
             const locals = module.local_types.items[locals_start .. locals_start + locals_definitions_count];
 
             if (function_index_start + i >= module.functions.list.items.len) return error.FunctionCodeSectionsInconsistent;
-            const parsed_code = try self.readFunction(module, locals, function_index_start + i);
+            const parsed_code = try self.readFunction(alloc, module, locals, function_index_start + i);
 
-            try module.codes.list.append(Code{
+            try module.codes.list.append(alloc, Code{
                 .locals_count = locals_count,
                 .start = parsed_code.start,
                 .required_stack_space = parsed_code.max_depth,
@@ -693,7 +691,7 @@ pub const Decoder = struct {
         }
     }
 
-    fn decodeDataSection(self: *Decoder, module: *Module) !void {
+    fn decodeDataSection(self: *Decoder, alloc: mem.Allocator, module: *Module) !void {
         const count = try self.readLEB128(u32);
 
         if (module.data_count) |data_count| {
@@ -712,12 +710,12 @@ pub const Decoder = struct {
 
                     if (memidx >= module.memories.list.items.len) return error.ValidatorDataMemoryReferenceInvalid;
 
-                    const parsed_code = try self.readConstantExpression(module, .I32);
+                    const parsed_code = try self.readConstantExpression(alloc, module, .I32);
 
                     const data_length = try self.readLEB128(u32);
                     const data = try self.readSlice(data_length);
 
-                    try module.datas.list.append(DataSegment{
+                    try module.datas.list.append(alloc, DataSegment{
                         .count = data_length,
                         .data = data,
                         .mode = DataSegmentMode{ .Active = .{
@@ -730,7 +728,7 @@ pub const Decoder = struct {
                     const data_length = try self.readLEB128(u32);
                     const data = try self.readSlice(data_length);
 
-                    try module.datas.list.append(DataSegment{
+                    try module.datas.list.append(alloc, DataSegment{
                         .count = data_length,
                         .data = data,
                         .mode = .Passive,
@@ -741,12 +739,12 @@ pub const Decoder = struct {
 
                     if (memidx >= module.memories.list.items.len) return error.ValidatorDataMemoryReferenceInvalid;
 
-                    const parsed_code = try self.readConstantExpression(module, .I32);
+                    const parsed_code = try self.readConstantExpression(alloc, module, .I32);
 
                     const data_length = try self.readLEB128(u32);
                     const data = try self.readSlice(data_length);
 
-                    try module.datas.list.append(DataSegment{
+                    try module.datas.list.append(alloc, DataSegment{
                         .count = data_length,
                         .data = data,
                         .mode = DataSegmentMode{ .Active = .{
@@ -762,7 +760,7 @@ pub const Decoder = struct {
         }
     }
 
-    fn decodeCustomSection(self: *Decoder, module: *Module, size: u32) !void {
+    fn decodeCustomSection(self: *Decoder, alloc: mem.Allocator, module: *Module, size: u32) !void {
         const offset = self.fbs.pos;
 
         const name_length = try self.readLEB128(u32);
@@ -773,29 +771,29 @@ pub const Decoder = struct {
         const data_length = try math.sub(usize, size, (self.fbs.pos - offset));
         const data = try self.readSlice(data_length);
 
-        try module.customs.list.append(Custom{
+        try module.customs.list.append(alloc, Custom{
             .name = name,
             .data = data,
         });
     }
 
-    pub fn readConstantExpression(self: *Decoder, module: *Module, valtype: ValType) !Parsed {
+    pub fn readConstantExpression(self: *Decoder, alloc: mem.Allocator, module: *Module, valtype: ValType) !Parsed {
         const rd = self.fbs.reader();
         const code = module.wasm_bin[rd.context.pos..];
 
         var parser = Parser.init(module, self);
-        defer parser.deinit();
+        defer parser.deinit(alloc);
 
-        return parser.parseConstantExpression(valtype, code);
+        return parser.parseConstantExpression(alloc, valtype, code);
     }
 
-    pub fn readFunction(self: *Decoder, module: *Module, locals: []LocalType, funcidx: usize) !Parsed {
+    pub fn readFunction(self: *Decoder, alloc: mem.Allocator, module: *Module, locals: []LocalType, funcidx: usize) !Parsed {
         const code = module.wasm_bin[self.fbs.pos..];
 
         var parser = Parser.init(module, self);
         defer parser.deinit();
 
-        return parser.parseFunction(funcidx, locals, code);
+        return parser.parseFunction(alloc, funcidx, locals, code);
     }
 
     fn readByte(self: *Decoder) !u8 {
@@ -827,18 +825,18 @@ pub const Decoder = struct {
 fn Section(comptime T: type) type {
     return struct {
         count: usize = 0,
-        list: ArrayList(T),
+        list: ArrayListUnmanaged(T),
 
         const Self = @This();
 
-        pub fn init(alloc: mem.Allocator) Self {
+        pub fn init() Self {
             return Self{
-                .list = ArrayList(T).init(alloc),
+                .list = ArrayListUnmanaged(T).empty,
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.list.deinit();
+        pub fn deinit(self: *Self, alloc: mem.Allocator) void {
+            self.list.deinit(alloc);
         }
 
         pub fn itemsSlice(self: *Self) []T {
@@ -1015,7 +1013,7 @@ pub const LocalType = struct {
 const testing = std.testing;
 
 test "module loading (simple add function)" {
-    const Store = @import("store.zig").ArrayListStore;
+    const Store = @import("store.zig").ArrayListUnmanagedStore;
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer _ = arena.deinit();
@@ -1024,9 +1022,9 @@ test "module loading (simple add function)" {
 
     const bytes = @embedFile("test/test.wasm");
 
-    var store: Store = Store.init(alloc);
+    var store: Store = Store.empty;
 
-    var module = Module.init(alloc, bytes);
+    var module = Module.init(bytes);
     try module.decode();
 
     var instance = Instance.init(alloc, &store, module);
@@ -1039,7 +1037,7 @@ test "module loading (simple add function)" {
 }
 
 test "module loading (fib)" {
-    const Store = @import("store.zig").ArrayListStore;
+    const Store = @import("store.zig").ArrayListUnmanagedStore;
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer _ = arena.deinit();
@@ -1048,7 +1046,7 @@ test "module loading (fib)" {
 
     const bytes = @embedFile("test/fib.wasm");
 
-    var store: Store = Store.init(alloc);
+    var store: Store = Store.empty;
 
     var module = Module.init(alloc, bytes);
     try module.decode();
@@ -1087,7 +1085,7 @@ test "module loading (fib)" {
 }
 
 test "module loading (fact)" {
-    const Store = @import("store.zig").ArrayListStore;
+    const Store = @import("store.zig").ArrayListUnmanagedStore;
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer _ = arena.deinit();
@@ -1096,7 +1094,7 @@ test "module loading (fact)" {
 
     const bytes = @embedFile("test/fact.wasm");
 
-    var store: Store = Store.init(alloc);
+    var store: Store = Store.empty;
 
     var module = Module.init(alloc, bytes);
     try module.decode();

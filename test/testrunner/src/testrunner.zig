@@ -17,7 +17,7 @@ const VirtualMachine = zware.VirtualMachine;
 const GeneralPurposeAllocator = std.heap.GeneralPurposeAllocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const StringHashMap = std.hash_map.StringHashMap;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const WasmError = zware.WasmError;
 
 // testrunner
@@ -97,29 +97,29 @@ pub fn main() anyerror!void {
     var module: Module = undefined;
 
     // Initialise a store
-    var store: Store = Store.init(alloc);
+    var store: Store = Store.init();
     const spectest = "spectest";
 
     // Init spectest memory
-    try store.exposeMemory(spectest, "memory", 1, 2);
+    try store.exposeMemory(alloc, spectest, "memory", 1, 2);
 
     // Init spectest table
-    try store.exposeTable(spectest, "table", .FuncRef, 10, 20);
+    try store.exposeTable(alloc, spectest, "table", .FuncRef, 10, 20);
 
     // Expose spectest globals
-    try store.exposeGlobal(spectest, "global_i32", 666, .I32, .Immutable);
-    try store.exposeGlobal(spectest, "global_i64", 666, .I64, .Immutable);
-    try store.exposeGlobal(spectest, "global_f32", 666, .F32, .Immutable);
-    try store.exposeGlobal(spectest, "global_f64", 666, .F64, .Immutable);
+    try store.exposeGlobal(alloc, spectest, "global_i32", 666, .I32, .Immutable);
+    try store.exposeGlobal(alloc, spectest, "global_i64", 666, .I64, .Immutable);
+    try store.exposeGlobal(alloc, spectest, "global_f32", 666, .F32, .Immutable);
+    try store.exposeGlobal(alloc, spectest, "global_f64", 666, .F64, .Immutable);
 
     // Expose host functions
-    try store.exposeHostFunction(spectest, "print", print, 0, &[_]ValType{}, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_i32", print_i32, 0, &[_]ValType{.I32}, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_i64", print_i64, 0, &[_]ValType{.I64}, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_f32", print_f32, 0, &[_]ValType{.F32}, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_f64", print_f64, 0, &[_]ValType{.F64}, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_i32_f32", print_i32_f32, 0, &[_]ValType{ .I32, .F32 }, &[_]ValType{});
-    try store.exposeHostFunction(spectest, "print_f64_f64", print_f64_f64, 0, &[_]ValType{ .F64, .F64 }, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print", print, 0, &[_]ValType{}, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_i32", print_i32, 0, &[_]ValType{.I32}, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_i64", print_i64, 0, &[_]ValType{.I64}, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_f32", print_f32, 0, &[_]ValType{.F32}, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_f64", print_f64, 0, &[_]ValType{.F64}, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_i32_f32", print_i32_f32, 0, &[_]ValType{ .I32, .F32 }, &[_]ValType{});
+    try store.exposeHostFunction(alloc, spectest, "print_f64_f64", print_f64_f64, 0, &[_]ValType{ .F64, .F64 }, &[_]ValType{});
 
     var current_instance: *Instance = undefined;
     var registered_names = StringHashMap(*Instance).init(alloc);
@@ -137,11 +137,11 @@ pub fn main() anyerror!void {
                 }
 
                 // 4. Initialise our module
-                module = Module.init(alloc, program);
-                try module.decode();
+                module = Module.init(program);
+                try module.decode(alloc);
 
                 current_instance = try alloc.create(Instance);
-                current_instance.* = Instance.init(alloc, &store, module);
+                current_instance.* = Instance.init(&store, module);
                 try current_instance.instantiate();
 
                 if (command.module.name) |name| {
@@ -406,13 +406,13 @@ pub fn main() anyerror!void {
                 std.debug.print("(invalid): {s}:{} ({s})\n", .{ r.source_filename, command.assert_invalid.line, wasm_filename });
 
                 program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
-                module = Module.init(alloc, program);
+                module = Module.init(program);
 
                 errdefer {
                     std.debug.print("ERROR (invalid): {s}:{}\n", .{ r.source_filename, command.assert_invalid.line });
                 }
 
-                if (module.decode()) |_| {
+                if (module.decode(alloc)) |_| {
                     return error.TestsuiteExpectedInvalid;
                 } else |err| switch (err) {
                     error.InvalidAlignment => continue,
@@ -478,7 +478,7 @@ pub fn main() anyerror!void {
                     std.debug.print("ERROR (malformed): {s}:{}\n", .{ r.source_filename, command.assert_malformed.line });
                 }
 
-                if (module.decode()) |_| {
+                if (module.decode(alloc)) |_| {
                     return error.TestsuiteMalformedExpectedButDecodedOk;
                 } else |err| {
                     if (mem.eql(u8, trap, "unexpected end") or mem.eql(u8, trap, "length out of bounds")) {
@@ -669,11 +669,11 @@ pub fn main() anyerror!void {
                 program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
 
                 module = Module.init(alloc, program);
-                try module.decode();
+                try module.decode(alloc);
 
                 var instance = try alloc.create(Instance);
-                instance.* = Instance.init(alloc, &store, module);
-                if (instance.instantiate()) |_| {
+                instance.* = Instance.init(&store, module);
+                if (instance.instantiate(alloc)) |_| {
                     return error.ExpectedUnlinkable;
                 } else |err| switch (err) {
                     error.LimitMismatch => continue,
@@ -695,12 +695,12 @@ pub fn main() anyerror!void {
                 std.debug.print("(uninstantiable): {s}:{} ({s})\n", .{ r.source_filename, command.assert_uninstantiable.line, wasm_filename });
                 program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
 
-                module = Module.init(alloc, program);
-                try module.decode();
+                module = Module.init(program);
+                try module.decode(alloc);
 
                 var instance = try alloc.create(Instance);
-                instance.* = Instance.init(alloc, &store, module);
-                if (instance.instantiate()) |_| {
+                instance.* = Instance.init(&store, module);
+                if (instance.instantiate(alloc)) |_| {
                     return error.ExpectedUninstantiable;
                 } else |err| switch (err) {
                     error.TrapUnreachable => continue,

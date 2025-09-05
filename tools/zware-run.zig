@@ -48,8 +48,8 @@ fn main2() !void {
     const wasm_path = pos_args[0];
     const wasm_func_name = pos_args[1];
 
-    var store = zware.Store.init(global.alloc);
-    defer store.deinit();
+    var store = zware.Store.init();
+    defer store.deinit(global.alloc);
 
     const wasm_content = content_blk: {
         var file = std.fs.cwd().openFile(wasm_path, .{}) catch |e| {
@@ -73,20 +73,20 @@ fn main2() !void {
         std.process.exit(0xff);
     }
 
-    var instance = zware.Instance.init(global.alloc, &store, module);
-    defer if (enable_leak_detection) instance.deinit();
+    var instance = zware.Instance.init(&store, module);
+    defer if (enable_leak_detection) instance.deinit(global.alloc);
 
     try populateMissingImports(&store, &module);
 
     var zware_error: zware.Error = undefined;
-    instance.instantiateWithError(&zware_error) catch |err| switch (err) {
+    instance.instantiateWithError(global.alloc, &zware_error) catch |err| switch (err) {
         error.SeeContext => {
             std.log.err("failed to instantiate the module: {}", .{zware_error});
             std.process.exit(0xff);
         },
         else => |e| return e,
     };
-    defer instance.deinit();
+    defer instance.deinit(global.alloc);
 
     var in = [_]u64{};
     const out_args = try global.alloc.alloc(u64, export_functype.results.len);
@@ -164,7 +164,7 @@ fn populateMissingImports(store: *zware.Store, module: *const zware.Module) !voi
             .Mem => {
                 const memdef = module.memories.list.items[import_memidx];
                 std.debug.assert(memdef.import.? == import_index);
-                try store.exposeMemory(import.module, import.name, memdef.limits.min, memdef.limits.max);
+                try store.exposeMemory(global.alloc, import.module, import.name, memdef.limits.min, memdef.limits.max);
             },
             else => |tag| std.debug.panic("todo: handle import {s}", .{@tagName(tag)}),
         }

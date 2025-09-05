@@ -2,21 +2,19 @@ const std = @import("std");
 const mem = std.mem;
 const math = std.math;
 const RefType = @import("../valtype.zig").RefType;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
 pub const Table = struct {
-    alloc: mem.Allocator,
-    data: ArrayList(?usize),
+    data: ArrayListUnmanaged(?usize),
     min: u32,
     max: ?u32,
     reftype: RefType,
 
-    pub fn init(alloc: mem.Allocator, reftype: RefType, min: u32, max: ?u32) !Table {
-        var data = ArrayList(?usize).init(alloc);
+    pub fn init(reftype: RefType, min: u32, max: ?u32) !Table {
+        var data = ArrayListUnmanaged(?usize).empty;
         try data.appendNTimes(null, min);
 
         return Table{
-            .alloc = alloc,
             .data = data,
             .min = min,
             .max = max,
@@ -47,7 +45,7 @@ pub const Table = struct {
         return self.data.items.len;
     }
 
-    pub fn grow(self: *Table, n: u32) !u32 {
+    pub fn grow(self: *Table, alloc: mem.Allocator, n: u32) !u32 {
         const len = math.cast(u32, self.data.items.len) orelse return error.TableGrowToolarge;
         _ = try math.add(u32, len, n);
 
@@ -57,7 +55,7 @@ pub const Table = struct {
 
         const old_size = math.cast(u32, self.data.items.len) orelse return error.TableGrowToolarge;
 
-        try self.data.appendNTimes(null, n);
+        try self.data.appendNTimes(alloc, null, n);
 
         return old_size;
     }

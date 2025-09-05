@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const math = std.math;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Function = @import("store/function.zig").Function;
 const Memory = @import("store/memory.zig").Memory;
 const Table = @import("store/table.zig").Table;
@@ -22,9 +22,9 @@ const WasmError = @import("instance/vm.zig").WasmError;
 //   that allocates individual items differently. For example,
 //   if you know ahead of time that you will only load a fixed
 //   number of modules during the lifetime of the program, then
-//   you might be quite happy with a store that uses ArrayLists
-//   with an arena allocator, i.e. you are going to deallocate
-//   everything at the same time.
+//   you might be quite happy with a store that uses
+//   ArrayListUnmanaged's with an arena allocator, i.e. you are
+//   going to deallocate everything at the same time.
 
 pub const ImportExport = struct {
     import: Import,
@@ -32,50 +32,48 @@ pub const ImportExport = struct {
 };
 
 pub const ArrayListStore = struct {
-    alloc: mem.Allocator,
-    functions: ArrayList(Function),
-    memories: ArrayList(Memory),
-    tables: ArrayList(Table),
-    globals: ArrayList(Global),
-    elems: ArrayList(Elem),
-    datas: ArrayList(Data),
-    imports: ArrayList(ImportExport),
+    functions: ArrayListUnmanaged(Function),
+    memories: ArrayListUnmanaged(Memory),
+    tables: ArrayListUnmanaged(Table),
+    globals: ArrayListUnmanaged(Global),
+    elems: ArrayListUnmanaged(Elem),
+    datas: ArrayListUnmanaged(Data),
+    imports: ArrayListUnmanaged(ImportExport),
 
-    pub fn init(alloc: mem.Allocator) ArrayListStore {
+    pub fn init() ArrayListStore {
         const store = ArrayListStore{
-            .alloc = alloc,
-            .functions = ArrayList(Function).init(alloc),
-            .memories = ArrayList(Memory).init(alloc),
-            .tables = ArrayList(Table).init(alloc),
-            .globals = ArrayList(Global).init(alloc),
-            .elems = ArrayList(Elem).init(alloc),
-            .datas = ArrayList(Data).init(alloc),
-            .imports = ArrayList(ImportExport).init(alloc),
+            .functions = ArrayListUnmanaged(Function).empty,
+            .memories = ArrayListUnmanaged(Memory).empty,
+            .tables = ArrayListUnmanaged(Table).empty,
+            .globals = ArrayListUnmanaged(Global).empty,
+            .elems = ArrayListUnmanaged(Elem).empty,
+            .datas = ArrayListUnmanaged(Data).empty,
+            .imports = ArrayListUnmanaged(ImportExport).empty,
         };
 
         return store;
     }
 
-    pub fn deinit(self: *ArrayListStore) void {
-        defer self.functions.deinit();
-        defer self.memories.deinit();
-        defer self.tables.deinit();
-        defer self.globals.deinit();
-        defer self.elems.deinit();
-        defer self.datas.deinit();
-        defer self.imports.deinit();
+    pub fn deinit(self: *ArrayListStore, alloc: mem.Allocator) void {
+        defer self.functions.deinit(alloc);
+        defer self.memories.deinit(alloc);
+        defer self.tables.deinit(alloc);
+        defer self.globals.deinit(alloc);
+        defer self.elems.deinit(alloc);
+        defer self.datas.deinit(alloc);
+        defer self.imports.deinit(alloc);
 
         for (self.memories.items) |*m| {
-            m.deinit();
+            m.deinit(alloc);
         }
         for (self.tables.items) |*t| {
-            t.deinit();
+            t.deinit(alloc);
         }
         for (self.elems.items) |*e| {
-            e.deinit();
+            e.deinit(alloc);
         }
         for (self.datas.items) |*d| {
-            d.deinit();
+            d.deinit(alloc);
         }
     }
 
@@ -95,8 +93,8 @@ pub const ArrayListStore = struct {
         return error.ImportNotFound;
     }
 
-    pub fn @"export"(self: *ArrayListStore, module: []const u8, name: []const u8, tag: Tag, handle: usize) !void {
-        try self.imports.append(ImportExport{
+    pub fn @"export"(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, tag: Tag, handle: usize) !void {
+        try self.imports.append(alloc, ImportExport{
             .import = Import{
                 .module = module,
                 .name = name,
@@ -113,8 +111,8 @@ pub const ArrayListStore = struct {
         return self.functions.items[funcaddr];
     }
 
-    pub fn addFunction(self: *ArrayListStore, func: Function) !usize {
-        const fun_ptr = try self.functions.addOne();
+    pub fn addFunction(self: *ArrayListStore, alloc: mem.Allocator, func: Function) !usize {
+        const fun_ptr = try self.functions.addOne(alloc);
         fun_ptr.* = func;
         return self.functions.items.len - 1;
     }
@@ -127,10 +125,10 @@ pub const ArrayListStore = struct {
     }
 
     /// Allocate a new Memory with min / max size and add to store.
-    pub fn addMemory(self: *ArrayListStore, min: u32, max: ?u32) !usize {
-        const mem_ptr = try self.memories.addOne();
-        mem_ptr.* = Memory.init(self.alloc, min, max);
-        _ = try mem_ptr.grow(min);
+    pub fn addMemory(self: *ArrayListStore, alloc: mem.Allocator, min: u32, max: ?u32) !usize {
+        const mem_ptr = try self.memories.addOne(alloc);
+        mem_ptr.* = Memory.init(min, max);
+        _ = try mem_ptr.grow(alloc, min);
         return self.memories.items.len - 1;
     }
 
@@ -141,8 +139,8 @@ pub const ArrayListStore = struct {
         return &self.tables.items[tableaddr];
     }
 
-    pub fn addTable(self: *ArrayListStore, reftype: RefType, entries: u32, max: ?u32) !usize {
-        const tbl_ptr = try self.tables.addOne();
+    pub fn addTable(self: *ArrayListStore, alloc: mem.Allocator, reftype: RefType, entries: u32, max: ?u32) !usize {
+        const tbl_ptr = try self.tables.addOne(alloc);
         tbl_ptr.* = try Table.init(self.alloc, reftype, entries, max);
         return self.tables.items.len - 1;
     }
@@ -155,8 +153,8 @@ pub const ArrayListStore = struct {
     }
 
     /// Add a Global to the store and return its globaladdr
-    pub fn addGlobal(self: *ArrayListStore, value: Global) !usize {
-        const glbl_ptr = try self.globals.addOne();
+    pub fn addGlobal(self: *ArrayListStore, alloc: mem.Allocator, value: Global) !usize {
+        const glbl_ptr = try self.globals.addOne(alloc);
         glbl_ptr.* = value;
 
         return self.globals.items.len - 1;
@@ -169,8 +167,8 @@ pub const ArrayListStore = struct {
         return &self.elems.items[elemaddr];
     }
 
-    pub fn addElem(self: *ArrayListStore, reftype: RefType, count: u32) !usize {
-        const elem_ptr = try self.elems.addOne();
+    pub fn addElem(self: *ArrayListStore, alloc: mem.Allocator, reftype: RefType, count: u32) !usize {
+        const elem_ptr = try self.elems.addOne(alloc);
         elem_ptr.* = try Elem.init(self.alloc, reftype, count);
         return self.elems.items.len - 1;
     }
@@ -182,8 +180,8 @@ pub const ArrayListStore = struct {
         return &self.datas.items[dataaddr];
     }
 
-    pub fn addData(self: *ArrayListStore, count: u32) !usize {
-        const data_ptr = try self.datas.addOne();
+    pub fn addData(self: *ArrayListStore, alloc: mem.Allocator, count: u32) !usize {
+        const data_ptr = try self.datas.addOne(alloc);
         data_ptr.* = try Data.init(self.alloc, count);
         return self.datas.items.len - 1;
     }
@@ -192,6 +190,7 @@ pub const ArrayListStore = struct {
 
     pub fn exposeHostFunction(
         self: *ArrayListStore,
+        alloc: mem.Allocator,
         module: []const u8,
         function_name: []const u8,
         host_function_pointer: *const fn (*VirtualMachine, usize) WasmError!void,
@@ -199,7 +198,7 @@ pub const ArrayListStore = struct {
         params: []const ValType,
         results: []const ValType,
     ) !void {
-        const funcaddr = try self.addFunction(Function{
+        const funcaddr = try self.addFunction(alloc, Function{
             .params = params,
             .results = results,
             .subtype = .{
@@ -210,40 +209,40 @@ pub const ArrayListStore = struct {
             },
         });
 
-        try self.@"export"(module[0..], function_name[0..], .Func, funcaddr);
+        try self.@"export"(alloc, module[0..], function_name[0..], .Func, funcaddr);
     }
 
-    pub fn exposeMemory(self: *ArrayListStore, module: []const u8, name: []const u8, min: u32, max: ?u32) !void {
-        const memaddr = try self.addMemory(min, max);
+    pub fn exposeMemory(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, min: u32, max: ?u32) !void {
+        const memaddr = try self.addMemory(alloc, min, max);
 
-        try self.@"export"(module, name, .Mem, memaddr);
+        try self.@"export"(alloc, module, name, .Mem, memaddr);
     }
 
-    pub fn exposeTable(self: *ArrayListStore, module: []const u8, name: []const u8, reftype: RefType, entries: u32, max: ?u32) !void {
-        const tableaddr = try self.addTable(reftype, entries, max);
+    pub fn exposeTable(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, reftype: RefType, entries: u32, max: ?u32) !void {
+        const tableaddr = try self.addTable(alloc, reftype, entries, max);
 
-        try self.@"export"(module, name, .Table, tableaddr);
+        try self.@"export"(alloc, module, alloc, name, .Table, tableaddr);
     }
 
-    pub fn exposeGlobal(self: *ArrayListStore, module: []const u8, name: []const u8, value: u64, valtype: ValType, mutability: Mutability) !void {
-        const globaladdr = try self.addGlobal(.{
+    pub fn exposeGlobal(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, value: u64, valtype: ValType, mutability: Mutability) !void {
+        const globaladdr = try self.addGlobal(alloc, .{
             .value = value,
             .valtype = valtype,
             .mutability = mutability,
         });
 
-        try self.@"export"(module, name, .Global, globaladdr);
+        try self.@"export"(alloc, module, name, .Global, globaladdr);
     }
 
-    pub fn exposeElem(self: *ArrayListStore, module: []const u8, name: []const u8, reftype: RefType, count: u32) !void {
-        const elemaddr = try self.addElem(reftype, count);
+    pub fn exposeElem(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, reftype: RefType, count: u32) !void {
+        const elemaddr = try self.addElem(alloc, reftype, count);
 
-        try self.@"export"(module, name, .Elem, elemaddr);
+        try self.@"export"(alloc, module, name, .Elem, elemaddr);
     }
 
-    pub fn exposeData(self: *ArrayListStore, module: []const u8, name: []const u8, count: u32) !void {
-        const dataaddr = try self.addData(count);
+    pub fn exposeData(self: *ArrayListStore, alloc: mem.Allocator, module: []const u8, name: []const u8, count: u32) !void {
+        const dataaddr = try self.addData(alloc, count);
 
-        try self.@"export"(module, name, .Data, dataaddr);
+        try self.@"export"(alloc, module, name, .Data, dataaddr);
     }
 };

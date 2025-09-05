@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const math = std.math;
 const leb = std.leb;
 const ArrayList = std.ArrayList;
@@ -46,22 +47,22 @@ pub const Parser = struct {
         };
     }
 
-    pub fn deinit(self: *Parser) void {
-        self.validator.deinit();
+    pub fn deinit(self: *Parser, alloc: mem.Allocator) void {
+        self.validator.deinit(alloc);
     }
 
-    pub fn parseFunction(self: *Parser, funcidx: usize, locals: []LocalType, code: []const u8) !Parsed {
-        self.validator = Validator.init(self.module.alloc, false);
+    pub fn parseFunction(self: *Parser, alloc: mem.Allocator, funcidx: usize, locals: []LocalType, code: []const u8) !Parsed {
+        self.validator = Validator.init(false);
         self.is_constant = false;
 
         self.function = code;
         self.code = code;
         const code_start = self.module.parsed_code.items.len;
 
-        try self.pushFunction(locals, funcidx);
+        try self.pushFunction(alloc, locals, funcidx);
 
         while (try self.next()) |instr| {
-            try self.module.parsed_code.append(instr);
+            try self.module.parsed_code.append(alloc, instr);
         }
 
         const bytes_read = self.bytesRead();
@@ -73,8 +74,8 @@ pub const Parser = struct {
         return Parsed{ .start = code_start, .max_depth = self.validator.max_depth };
     }
 
-    pub fn parseConstantExpression(self: *Parser, valtype: ValType, code: []const u8) !Parsed {
-        self.validator = Validator.init(self.module.alloc, true);
+    pub fn parseConstantExpression(self: *Parser, alloc: mem.Allocator, valtype: ValType, code: []const u8) !Parsed {
+        self.validator = Validator.init(alloc, true);
         self.is_constant = true;
 
         self.function = code;
@@ -116,7 +117,7 @@ pub const Parser = struct {
     }
 
     // pushFunction initiliase the validator for the current function
-    fn pushFunction(self: *Parser, locals: []LocalType, funcidx: usize) !void {
+    fn pushFunction(self: *Parser, alloc: mem.Allocator, locals: []LocalType, funcidx: usize) !void {
         const func = try self.module.functions.lookup(funcidx);
         const functype = try self.module.types.lookup(func.typeidx);
 
@@ -124,6 +125,7 @@ pub const Parser = struct {
         self.locals = locals;
 
         try self.validator.pushControlFrame(
+            alloc,
             .nop, // block?
             functype.params[0..0],
             functype.results,
@@ -153,7 +155,7 @@ pub const Parser = struct {
         return self.function.len - self.code.len;
     }
 
-    pub fn next(self: *Parser) !?Rr {
+    pub fn next(self: *Parser, alloc: mem.Allocator) !?Rr {
         defer self.code_ptr += 1;
         if (self.scope > 0 and self.code.len == 0) return error.CouldntFindEnd;
 
@@ -181,19 +183,19 @@ pub const Parser = struct {
                     const functype = try self.module.types.lookup(funcidx);
                     block_params = math.cast(u16, functype.params.len) orelse return error.FailedCast;
                     block_returns = math.cast(u16, functype.results.len) orelse return error.FailedCast;
-                    try self.validator.validateBlock(functype.params, functype.results);
+                    try self.validator.validateBlock(alloc, functype.params, functype.results);
                 } else {
                     if (block_type == -0x40) {
-                        try self.validator.validateBlock(EMPTY[0..], EMPTY[0..]);
+                        try self.validator.validateBlock(alloc, EMPTY[0..], EMPTY[0..]);
                     } else {
                         switch (try valueTypeFromBlockType(block_type)) {
-                            .I32 => try self.validator.validateBlock(EMPTY[0..], I32_OUT[0..]),
-                            .I64 => try self.validator.validateBlock(EMPTY[0..], I64_OUT[0..]),
-                            .F32 => try self.validator.validateBlock(EMPTY[0..], F32_OUT[0..]),
-                            .F64 => try self.validator.validateBlock(EMPTY[0..], F64_OUT[0..]),
-                            .V128 => try self.validator.validateBlock(EMPTY[0..], V128_OUT[0..]),
-                            .FuncRef => try self.validator.validateBlock(EMPTY[0..], FUNCREF_OUT[0..]),
-                            .ExternRef => try self.validator.validateBlock(EMPTY[0..], EXTERNREF_OUT[0..]),
+                            .I32 => try self.validator.validateBlock(alloc, EMPTY[0..], I32_OUT[0..]),
+                            .I64 => try self.validator.validateBlock(alloc, EMPTY[0..], I64_OUT[0..]),
+                            .F32 => try self.validator.validateBlock(alloc, EMPTY[0..], F32_OUT[0..]),
+                            .F64 => try self.validator.validateBlock(alloc, EMPTY[0..], F64_OUT[0..]),
+                            .V128 => try self.validator.validateBlock(alloc, EMPTY[0..], V128_OUT[0..]),
+                            .FuncRef => try self.validator.validateBlock(alloc, EMPTY[0..], FUNCREF_OUT[0..]),
+                            .ExternRef => try self.validator.validateBlock(alloc, EMPTY[0..], EXTERNREF_OUT[0..]),
                         }
                     }
                 }
@@ -222,16 +224,16 @@ pub const Parser = struct {
                     try self.validator.validateLoop(functype.params, functype.results);
                 } else {
                     if (block_type == -0x40) {
-                        try self.validator.validateLoop(EMPTY[0..], EMPTY[0..]);
+                        try self.validator.validateLoop(alloc, EMPTY[0..], EMPTY[0..]);
                     } else {
                         switch (try valueTypeFromBlockType(block_type)) {
-                            .I32 => try self.validator.validateLoop(EMPTY[0..], I32_OUT[0..]),
-                            .I64 => try self.validator.validateLoop(EMPTY[0..], I64_OUT[0..]),
-                            .F32 => try self.validator.validateLoop(EMPTY[0..], F32_OUT[0..]),
-                            .F64 => try self.validator.validateLoop(EMPTY[0..], F64_OUT[0..]),
-                            .V128 => try self.validator.validateBlock(EMPTY[0..], V128_OUT[0..]),
-                            .FuncRef => try self.validator.validateBlock(EMPTY[0..], FUNCREF_OUT[0..]),
-                            .ExternRef => try self.validator.validateBlock(EMPTY[0..], EXTERNREF_OUT[0..]),
+                            .I32 => try self.validator.validateLoop(alloc, EMPTY[0..], I32_OUT[0..]),
+                            .I64 => try self.validator.validateLoop(alloc, EMPTY[0..], I64_OUT[0..]),
+                            .F32 => try self.validator.validateLoop(alloc, EMPTY[0..], F32_OUT[0..]),
+                            .F64 => try self.validator.validateLoop(alloc, EMPTY[0..], F64_OUT[0..]),
+                            .V128 => try self.validator.validateBlock(alloc, EMPTY[0..], V128_OUT[0..]),
+                            .FuncRef => try self.validator.validateBlock(alloc, EMPTY[0..], FUNCREF_OUT[0..]),
+                            .ExternRef => try self.validator.validateBlock(alloc, EMPTY[0..], EXTERNREF_OUT[0..]),
                         }
                     }
                 }
@@ -262,19 +264,19 @@ pub const Parser = struct {
                     const functype = try self.module.types.lookup(funcidx);
                     block_params = math.cast(u16, functype.params.len) orelse return error.FailedCast;
                     block_returns = math.cast(u16, functype.results.len) orelse return error.FailedCast;
-                    try self.validator.validateIf(functype.params, functype.results);
+                    try self.validator.validateIf(alloc, functype.params, functype.results);
                 } else {
                     if (block_type == -0x40) {
-                        try self.validator.validateIf(EMPTY[0..], EMPTY[0..]);
+                        try self.validator.validateIf(alloc, EMPTY[0..], EMPTY[0..]);
                     } else {
                         switch (try valueTypeFromBlockType(block_type)) {
-                            .I32 => try self.validator.validateIf(EMPTY[0..], I32_OUT[0..]),
-                            .I64 => try self.validator.validateIf(EMPTY[0..], I64_OUT[0..]),
-                            .F32 => try self.validator.validateIf(EMPTY[0..], F32_OUT[0..]),
-                            .F64 => try self.validator.validateIf(EMPTY[0..], F64_OUT[0..]),
-                            .V128 => try self.validator.validateBlock(EMPTY[0..], V128_OUT[0..]),
-                            .FuncRef => try self.validator.validateBlock(EMPTY[0..], FUNCREF_OUT[0..]),
-                            .ExternRef => try self.validator.validateBlock(EMPTY[0..], EXTERNREF_OUT[0..]),
+                            .I32 => try self.validator.validateIf(alloc, EMPTY[0..], I32_OUT[0..]),
+                            .I64 => try self.validator.validateIf(alloc, EMPTY[0..], I64_OUT[0..]),
+                            .F32 => try self.validator.validateIf(alloc, EMPTY[0..], F32_OUT[0..]),
+                            .F64 => try self.validator.validateIf(alloc, EMPTY[0..], F64_OUT[0..]),
+                            .V128 => try self.validator.validateBlock(alloc, EMPTY[0..], V128_OUT[0..]),
+                            .FuncRef => try self.validator.validateBlock(alloc, EMPTY[0..], FUNCREF_OUT[0..]),
+                            .ExternRef => try self.validator.validateBlock(alloc, EMPTY[0..], EXTERNREF_OUT[0..]),
                         }
                     }
                 }
@@ -340,7 +342,7 @@ pub const Parser = struct {
             },
             .br_if => {
                 const label = try self.readLEB128Mem(u32);
-                try self.validator.validateBrIf(label);
+                try self.validator.validateBrIf(alloc, label);
                 rr = Rr{ .br_if = label };
             },
             .br_table => {
@@ -350,12 +352,12 @@ pub const Parser = struct {
                 var j: usize = 0;
                 while (j < label_count) : (j += 1) {
                     const tmp_label = try self.readLEB128Mem(u32);
-                    try self.module.br_table_indices.append(tmp_label);
+                    try self.module.br_table_indices.append(alloc, tmp_label);
                 }
                 const ln = try self.readLEB128Mem(u32);
                 const l_star = self.module.br_table_indices.items[label_start .. label_start + j];
 
-                try self.validator.validateBrTable(l_star, ln);
+                try self.validator.validateBrTable(alloc, l_star, ln);
 
                 rr = Rr{
                     .br_table = .{
@@ -370,7 +372,7 @@ pub const Parser = struct {
                 const func = try self.module.functions.lookup(funcidx);
                 const functype = try self.module.types.lookup(func.typeidx);
 
-                try self.validator.validateCall(functype);
+                try self.validator.validateCall(alloc, functype);
 
                 rr = Rr{ .call = funcidx };
                 // TODO: do the replacement at instantiate-time for a fastcall if in same module?
@@ -383,7 +385,7 @@ pub const Parser = struct {
                 const tableidx = try self.readByte();
                 if (tableidx >= self.module.tables.list.items.len) return error.ValidatorCallIndirectNoTable;
 
-                try self.validator.validateCallIndirect(functype);
+                try self.validator.validateCallIndirect(alloc, functype);
 
                 rr = Rr{
                     .call_indirect = .{
@@ -400,7 +402,7 @@ pub const Parser = struct {
                 const valuetype_raw = try self.readLEB128Mem(u32);
                 const valuetype = try std.meta.intToEnum(ValType, valuetype_raw);
 
-                try self.validator.validateSelectT(valuetype);
+                try self.validator.validateSelectT(alloc, valuetype);
 
                 rr = Rr.select;
             },
@@ -408,7 +410,7 @@ pub const Parser = struct {
                 const globalidx = try self.readLEB128Mem(u32);
                 const global = try self.module.globals.lookup(globalidx);
 
-                try self.validator.validateGlobalGet(global);
+                try self.validator.validateGlobalGet(alloc, global);
 
                 rr = Rr{ .@"global.get" = globalidx };
             },
@@ -430,7 +432,7 @@ pub const Parser = struct {
                 };
 
                 _ = try self.validator.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try self.validator.pushOperand(Type{ .Known = reftype });
+                _ = try self.validator.pushOperand(alloc, Type{ .Known = reftype });
 
                 rr = Rr{ .@"table.get" = tableidx };
             },
@@ -454,7 +456,7 @@ pub const Parser = struct {
                 const locals = self.locals orelse return error.ValidatorConstantExpressionRequired;
 
                 if (localidx < params.len) {
-                    try self.validator.validateLocalGet(params[localidx]);
+                    try self.validator.validateLocalGet(alloc, params[localidx]);
                 } else {
                     const local_index = localidx - params.len;
                     var local_type: ?ValType = null;
@@ -468,7 +470,7 @@ pub const Parser = struct {
                     }
 
                     if (local_type) |ltype| {
-                        try self.validator.validateLocalGet(ltype);
+                        try self.validator.validateLocalGet(alloc, ltype);
                     } else {
                         return error.LocalGetIndexOutOfBounds;
                     }
@@ -512,7 +514,7 @@ pub const Parser = struct {
                 const locals = self.locals orelse return error.ValidatorConstantExpressionRequired;
 
                 if (localidx < params.len) {
-                    try self.validator.validateLocalTee(params[localidx]);
+                    try self.validator.validateLocalTee(alloc, params[localidx]);
                 } else {
                     const local_index = localidx - params.len;
                     var local_type: ?ValType = null;
@@ -526,7 +528,7 @@ pub const Parser = struct {
                     }
 
                     if (local_type) |ltype| {
-                        try self.validator.validateLocalTee(ltype);
+                        try self.validator.validateLocalTee(alloc, ltype);
                     } else {
                         return error.LocalTeeIndexOutOfBounds;
                     }
@@ -1046,7 +1048,7 @@ pub const Parser = struct {
             .misc => {
                 const version = try self.readLEB128Mem(u32);
                 const misc_opcode = try std.meta.intToEnum(MiscOpcode, version);
-                try self.validator.validateMisc(misc_opcode);
+                try self.validator.validateMisc(alloc, misc_opcode);
 
                 switch (misc_opcode) {
                     .@"i32.trunc_sat_f32_s" => rr = Rr{ .misc = MiscRr.@"i32.trunc_sat_f32_s" },
@@ -1146,7 +1148,7 @@ pub const Parser = struct {
                         _ = try self.validator.popOperandExpecting(Type{ .Known = .I32 });
                         _ = try self.validator.popOperandExpecting(Type{ .Known = reftype });
 
-                        try self.validator.pushOperand(Type{ .Known = .I32 });
+                        try self.validator.pushOperand(alloc, Type{ .Known = .I32 });
 
                         rr = Rr{ .misc = MiscRr{ .@"table.grow" = .{
                             .tableidx = tableidx,
@@ -1181,7 +1183,7 @@ pub const Parser = struct {
             },
         }
 
-        try self.validator.validate(instr);
+        try self.validator.validate(alloc, instr);
         return rr;
     }
 

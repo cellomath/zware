@@ -29,16 +29,16 @@ pub fn main() !void {
 
     const bytes = @embedFile("fib.wasm");
 
-    var store = Store.init(alloc);
-    defer store.deinit();
+    var store = Store.init();
+    defer store.deinit(alloc);
 
-    var module = Module.init(alloc, bytes);
-    defer module.deinit();
-    try module.decode();
+    var module = Module.init(bytes);
+    defer module.deinit(alloc);
+    try module.decode(alloc);
 
-    var instance = Instance.init(alloc, &store, module);
-    try instance.instantiate();
-    defer instance.deinit();
+    var instance = Instance.init(&store, module);
+    try instance.instantiate(alloc);
+    defer instance.deinit(alloc);
 
     const n = 39;
     var in = [1]u64{n};

@@ -4,7 +4,6 @@ const fs = std.fs;
 const fmt = std.fmt;
 const process = std.process;
 const zware = @import("zware");
-const ArrayList = std.ArrayList;
 const Module = zware.Module;
 const Store = zware.Store;
 const Instance = zware.Instance;
@@ -23,9 +22,9 @@ pub fn main() !void {
     const program = try fs.cwd().readFileAlloc(alloc, filename, 0xFFFFFFF);
     defer alloc.free(program);
 
-    var module = Module.init(alloc, program);
-    defer module.deinit();
-    try module.decode();
+    var module = Module.init(program);
+    defer module.deinit(alloc);
+    try module.decode(alloc);
 
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);

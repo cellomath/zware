@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const LinearFifo = std.fifo.LinearFifo;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const FuncType = @import("../module.zig").FuncType;
 const ValType = @import("../valtype.zig").ValType;
 const RefType = @import("../valtype.zig").RefType;
@@ -16,41 +16,41 @@ pub const Validator = struct {
     max_depth: usize = 0,
     is_constant: bool,
 
-    pub fn init(alloc: mem.Allocator, is_constant: bool) Validator {
+    pub fn init(is_constant: bool) Validator {
         return Validator{
-            .op_stack = OperandStack.init(alloc),
-            .ctrl_stack = ControlStack.init(alloc),
+            .op_stack = OperandStack.empty,
+            .ctrl_stack = ControlStack.empty,
             .is_constant = is_constant,
         };
     }
 
-    pub fn deinit(self: *Validator) void {
+    pub fn deinit(alloc: mem.Allocator, self: *Validator) void {
         // Static allocation?
-        self.op_stack.deinit();
-        self.ctrl_stack.deinit();
+        self.op_stack.deinit(alloc);
+        self.ctrl_stack.deinit(alloc);
     }
 
-    pub fn validateBlock(v: *Validator, in_operands: []const ValType, out_operands: []const ValType) !void {
+    pub fn validateBlock(v: *Validator, alloc: mem.Allocator, in_operands: []const ValType, out_operands: []const ValType) !void {
         try v.popOperands(in_operands);
-        try v.pushControlFrame(.block, in_operands, out_operands);
+        try v.pushControlFrame(alloc, .block, in_operands, out_operands);
     }
 
-    pub fn validateLoop(v: *Validator, in_operands: []const ValType, out_operands: []const ValType) !void {
+    pub fn validateLoop(v: *Validator, alloc: mem.Allocator, in_operands: []const ValType, out_operands: []const ValType) !void {
         try v.popOperands(in_operands);
-        try v.pushControlFrame(.loop, in_operands, out_operands);
+        try v.pushControlFrame(alloc, .loop, in_operands, out_operands);
     }
 
-    pub fn validateSelectT(v: *Validator, valuetype: ValType) !void {
+    pub fn validateSelectT(v: *Validator, alloc: mem.Allocator, valuetype: ValType) !void {
         _ = try v.popOperandExpecting(Type{ .Known = .I32 });
         _ = try v.popOperandExpecting(Type{ .Known = valuetype });
         _ = try v.popOperandExpecting(Type{ .Known = valuetype });
-        try v.pushOperand(Type{ .Known = valuetype });
+        try v.pushOperand(alloc, Type{ .Known = valuetype });
     }
 
-    pub fn validateIf(v: *Validator, in_operands: []const ValType, out_operands: []const ValType) !void {
+    pub fn validateIf(v: *Validator, alloc: mem.Allocator, in_operands: []const ValType, out_operands: []const ValType) !void {
         _ = try v.popOperandExpecting(Type{ .Known = .I32 });
         try v.popOperands(in_operands);
-        try v.pushControlFrame(.@"if", in_operands, out_operands);
+        try v.pushControlFrame(alloc, .@"if", in_operands, out_operands);
     }
 
     pub fn validateBr(v: *Validator, label: usize) !void {
@@ -60,16 +60,16 @@ pub const Validator = struct {
         try v.setUnreachable();
     }
 
-    pub fn validateBrIf(v: *Validator, label: usize) !void {
+    pub fn validateBrIf(v: *Validator, alloc: mem.Allocator, label: usize) !void {
         if (label >= v.ctrl_stack.items.len) return error.ValidateBrIfInvalidLabel;
         const frame = v.ctrl_stack.items[v.ctrl_stack.items.len - 1 - label];
 
         _ = try v.popOperandExpecting(Type{ .Known = .I32 });
         try v.popOperands(labelTypes(frame));
-        try v.pushOperands(labelTypes(frame));
+        try v.pushOperands(alloc, labelTypes(frame));
     }
 
-    pub fn validateBrTable(v: *Validator, n_star: []u32, label: u32) !void {
+    pub fn validateBrTable(v: *Validator, alloc: mem.Allocator, n_star: []u32, label: u32) !void {
         _ = try v.popOperandExpecting(Type{ .Known = .I32 });
         if (label >= v.ctrl_stack.items.len) return error.ValidateBrTableInvalidLabel;
         const frame = v.ctrl_stack.items[v.ctrl_stack.items.len - 1 - label];
@@ -89,7 +89,7 @@ pub const Validator = struct {
             }
 
             for (labelTypes(frame_n), 0..) |_, i| {
-                try v.pushOperand(temp[arity - 1 - i]);
+                try v.pushOperand(alloc, temp[arity - 1 - i]);
             }
         }
 
@@ -97,33 +97,33 @@ pub const Validator = struct {
         try v.setUnreachable();
     }
 
-    pub fn validateCall(v: *Validator, func_type: FuncType) !void {
+    pub fn validateCall(v: *Validator, alloc: mem.Allocator, func_type: FuncType) !void {
         try v.popOperands(func_type.params);
-        try v.pushOperands(func_type.results);
+        try v.pushOperands(alloc, func_type.results);
     }
 
-    pub fn validateCallIndirect(v: *Validator, func_type: FuncType) !void {
+    pub fn validateCallIndirect(v: *Validator, alloc: mem.Allocator, func_type: FuncType) !void {
         _ = try v.popOperandExpecting(Type{ .Known = .I32 });
         try v.popOperands(func_type.params);
-        try v.pushOperands(func_type.results);
+        try v.pushOperands(alloc, func_type.results);
     }
 
-    pub fn validateLocalGet(v: *Validator, local_type: ValType) !void {
-        try v.pushOperand(Type{ .Known = local_type });
+    pub fn validateLocalGet(v: *Validator, alloc: mem.Allocator, local_type: ValType) !void {
+        try v.pushOperand(alloc, Type{ .Known = local_type });
     }
 
     pub fn validateLocalSet(v: *Validator, local_type: ValType) !void {
         _ = try v.popOperandExpecting(Type{ .Known = local_type });
     }
 
-    pub fn validateLocalTee(v: *Validator, local_type: ValType) !void {
+    pub fn validateLocalTee(v: *Validator, alloc: mem.Allocator, local_type: ValType) !void {
         const t = try v.popOperandExpecting(Type{ .Known = local_type });
-        try v.pushOperand(t);
+        try v.pushOperand(alloc, t);
     }
 
-    pub fn validateGlobalGet(v: *Validator, globaltype: GlobalType) !void {
+    pub fn validateGlobalGet(v: *Validator, alloc: mem.Allocator, globaltype: GlobalType) !void {
         if (v.is_constant and globaltype.mutability == .Mutable) return error.ValidatorMutableGlobalInConstantExpr;
-        try v.pushOperand(Type{ .Known = globaltype.valtype });
+        try v.pushOperand(alloc, Type{ .Known = globaltype.valtype });
     }
 
     pub fn validateGlobalSet(v: *Validator, globaltype: GlobalType) !void {
@@ -138,31 +138,31 @@ pub const Validator = struct {
         }
     }
 
-    pub fn validateMisc(v: *Validator, misc_type: MiscOpcode) !void {
+    pub fn validateMisc(v: *Validator, alloc: mem.Allocator, misc_type: MiscOpcode) !void {
         switch (misc_type) {
             .@"i32.trunc_sat_f32_s",
             .@"i32.trunc_sat_f32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                try v.pushOperand(Type{ .Known = .I32 });
+                try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.trunc_sat_f64_s",
             .@"i32.trunc_sat_f64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                try v.pushOperand(Type{ .Known = .I32 });
+                try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i64.trunc_sat_f32_s",
             .@"i64.trunc_sat_f32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                try v.pushOperand(Type{ .Known = .I64 });
+                try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.trunc_sat_f64_s",
             .@"i64.trunc_sat_f64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                try v.pushOperand(Type{ .Known = .I64 });
+                try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"memory.init" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
@@ -197,13 +197,13 @@ pub const Validator = struct {
             },
             .@"table.grow" => {},
             .@"table.size" => {
-                try v.pushOperand(Type{ .Known = .I32 });
+                try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"table.fill" => {},
         }
     }
 
-    pub fn validate(v: *Validator, opcode: Opcode) !void {
+    pub fn validate(v: *Validator, alloc: mem.Allocator, opcode: Opcode) !void {
         switch (opcode) {
             .block,
             .loop,
@@ -233,7 +233,7 @@ pub const Validator = struct {
             .@"else" => {
                 const frame = try v.popControlFrame();
                 if (frame.opcode != .@"if") return error.ElseMustOnlyOccurAfterIf;
-                try v.pushControlFrame(.@"else", frame.start_types, frame.end_types);
+                try v.pushControlFrame(alloc, .@"else", frame.start_types, frame.end_types);
             },
             .@"return" => {
                 const frame = v.ctrl_stack.items[0];
@@ -251,13 +251,13 @@ pub const Validator = struct {
                 if (!(isNum(t1) and isNum(t2))) return error.ExpectingBothNum;
                 if (!typeEqual(t1, t2) and !typeEqual(t1, Type.Unknown) and !typeEqual(t2, Type.Unknown)) return error.ValidatorSelect;
                 if (typeEqual(t1, Type.Unknown)) {
-                    try v.pushOperand(t2);
+                    try v.pushOperand(alloc, t2);
                 } else {
-                    try v.pushOperand(t1);
+                    try v.pushOperand(alloc, t1);
                 }
             },
             .@"memory.size" => {
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.extend8_s",
             .@"i32.extend16_s",
@@ -270,7 +270,7 @@ pub const Validator = struct {
             .@"i32.load16_s",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.add",
             .@"i32.sub",
@@ -300,7 +300,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.store",
             .@"i32.store8",
@@ -311,31 +311,31 @@ pub const Validator = struct {
             },
             .@"i32.clz", .@"i32.ctz", .@"i32.popcnt" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.wrap_i64" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.reinterpret_f32",
             .@"i32.trunc_f32_s",
             .@"i32.trunc_f32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i32.trunc_f64_s",
             .@"i32.trunc_f64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i64.extend8_s",
             .@"i64.extend16_s",
             .@"i64.extend32_s",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.add",
             .@"i64.sub",
@@ -355,7 +355,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.store",
             .@"i64.store8",
@@ -378,15 +378,15 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i64.eqz" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i64.clz", .@"i64.ctz", .@"i64.popcnt" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.load",
             .@"i64.load8_s",
@@ -399,20 +399,20 @@ pub const Validator = struct {
             .@"i64.extend_i32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.trunc_f32_s",
             .@"i64.trunc_f32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"i64.reinterpret_f64",
             .@"i64.trunc_f64_s",
             .@"i64.trunc_f64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"f32.add",
             .@"f32.sub",
@@ -424,7 +424,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f32.abs",
             .@"f32.neg",
@@ -435,7 +435,7 @@ pub const Validator = struct {
             .@"f32.nearest",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f32.eq",
             .@"f32.ne",
@@ -446,7 +446,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"f32.store" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
@@ -458,17 +458,17 @@ pub const Validator = struct {
             .@"f32.reinterpret_i32",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f32.demote_f64" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f32.convert_i64_s",
             .@"f32.convert_i64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f64.add",
             .@"f64.sub",
@@ -480,7 +480,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"f64.abs",
             .@"f64.neg",
@@ -491,7 +491,7 @@ pub const Validator = struct {
             .@"f64.nearest",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"f64.eq",
             .@"f64.ne",
@@ -502,7 +502,7 @@ pub const Validator = struct {
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"f64.store" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F64 });
@@ -513,44 +513,44 @@ pub const Validator = struct {
             .@"f64.convert_i32_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I32 });
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"f64.reinterpret_i64",
             .@"f64.convert_i64_s",
             .@"f64.convert_i64_u",
             => {
                 _ = try v.popOperandExpecting(Type{ .Known = .I64 });
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"f64.promote_f32" => {
                 _ = try v.popOperandExpecting(Type{ .Known = .F32 });
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"i32.const" => {
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"i64.const" => {
-                _ = try v.pushOperand(Type{ .Known = .I64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I64 });
             },
             .@"f32.const" => {
-                _ = try v.pushOperand(Type{ .Known = .F32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F32 });
             },
             .@"f64.const" => {
-                _ = try v.pushOperand(Type{ .Known = .F64 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .F64 });
             },
             .@"ref.is_null" => {
                 _ = try v.popOperandExpecting(Type.Unknown); // Is this right? Do we need UnknownRefType + UnknownValType
-                _ = try v.pushOperand(Type{ .Known = .I32 });
+                _ = try v.pushOperand(alloc, Type{ .Known = .I32 });
             },
             .@"ref.func" => {
-                _ = try v.pushOperand(Type{ .Known = .FuncRef });
+                _ = try v.pushOperand(alloc, Type{ .Known = .FuncRef });
             },
         }
     }
 
-    pub fn pushOperand(v: *Validator, t: Type) !void {
+    pub fn pushOperand(v: *Validator, alloc: mem.Allocator, t: Type) !void {
         defer v.trackMaxDepth();
-        try v.op_stack.append(t);
+        try v.op_stack.append(alloc, t);
     }
 
     fn popOperand(v: *Validator) !Type {
@@ -573,9 +573,9 @@ pub const Validator = struct {
         }
     }
 
-    fn pushOperands(v: *Validator, operands: []const ValType) !void {
+    fn pushOperands(v: *Validator, alloc: mem.Allocator, operands: []const ValType) !void {
         for (operands) |op| {
-            try v.pushOperand(Type{ .Known = op });
+            try v.pushOperand(alloc, Type{ .Known = op });
         }
     }
 
@@ -592,7 +592,7 @@ pub const Validator = struct {
         }
     }
 
-    pub fn pushControlFrame(v: *Validator, opcode: Opcode, in: []const ValType, out: []const ValType) !void {
+    pub fn pushControlFrame(v: *Validator, alloc: mem.Allocator, opcode: Opcode, in: []const ValType, out: []const ValType) !void {
         const frame = ControlFrame{
             .opcode = opcode,
             .start_types = in,
@@ -600,8 +600,8 @@ pub const Validator = struct {
             .height = v.op_stack.items.len,
             .unreachable_flag = false,
         };
-        try v.ctrl_stack.append(frame);
-        try v.pushOperands(in);
+        try v.ctrl_stack.append(alloc, frame);
+        try v.pushOperands(alloc, in);
     }
 
     fn popControlFrame(v: *Validator) !ControlFrame {
@@ -666,8 +666,8 @@ pub const Type = union(TypeTag) {
     Unknown: void,
 };
 
-const OperandStack = ArrayList(Type);
-const ControlStack = ArrayList(ControlFrame);
+const OperandStack = ArrayListUnmanaged(Type);
+const ControlStack = ArrayListUnmanaged(ControlFrame);
 
 const ControlFrame = struct {
     opcode: Opcode = undefined,
@@ -682,81 +682,86 @@ test "validate add i32" {
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var v = Validator.init(arena.allocator(), false);
-    defer v.deinit();
+    const alloc = arena.allocator();
+    var v = Validator.init(false);
+    defer v.deinit(alloc);
 
     var in: [0]ValType = [_]ValType{} ** 0;
     var out: [1]ValType = [_]ValType{.I32} ** 1;
-    _ = try v.pushControlFrame(.block, in[0..], out[0..]);
-    _ = try v.validate(.@"i32.const");
-    _ = try v.validate(.drop);
-    _ = try v.validate(.@"i32.const");
-    _ = try v.validate(.@"i32.const");
-    _ = try v.validate(.@"i32.add");
-    _ = try v.validate(.end);
+    _ = try v.pushControlFrame(alloc, .block, in[0..], out[0..]);
+    _ = try v.validate(alloc, .@"i32.const");
+    _ = try v.validate(alloc, .drop);
+    _ = try v.validate(alloc, .@"i32.const");
+    _ = try v.validate(alloc, .@"i32.const");
+    _ = try v.validate(alloc, .@"i32.add");
+    _ = try v.validate(alloc, .end);
 }
 
 test "validate add i64" {
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var v = Validator.init(arena.allocator(), false);
-    defer v.deinit();
+    const alloc = arena.allocator();
+    var v = Validator.init(false);
+    defer v.deinit(alloc);
 
     var in: [0]ValType = [_]ValType{} ** 0;
     var out: [1]ValType = [_]ValType{.I64} ** 1;
-    _ = try v.pushControlFrame(.block, in[0..], out[0..]);
-    _ = try v.validate(.@"i64.const");
-    _ = try v.validate(.@"i64.const");
-    _ = try v.validate(.@"i64.add");
-    _ = try v.validate(.end);
+    _ = try v.pushControlFrame(alloc, .block, in[0..], out[0..]);
+    _ = try v.validate(alloc, .@"i64.const");
+    _ = try v.validate(alloc, .@"i64.const");
+    _ = try v.validate(alloc, .@"i64.add");
+    _ = try v.validate(alloc, .end);
 }
 
 test "validate add f32" {
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var v = Validator.init(arena.allocator(), false);
-    defer v.deinit();
+    const alloc = arena.allocator();
+    var v = Validator.init(false);
+    defer v.deinit(alloc);
 
     var in: [0]ValType = [_]ValType{} ** 0;
     var out: [1]ValType = [_]ValType{.F32} ** 1;
     _ = try v.pushControlFrame(.block, in[0..], out[0..]);
-    _ = try v.validate(.@"f32.const");
-    _ = try v.validate(.@"f32.const");
-    _ = try v.validate(.@"f32.add");
-    _ = try v.validate(.end);
+    _ = try v.validate(alloc, .@"f32.const");
+    _ = try v.validate(alloc, .@"f32.const");
+    _ = try v.validate(alloc, .@"f32.add");
+    _ = try v.validate(alloc, .end);
 }
 
 test "validate add f64" {
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var v = Validator.init(arena.allocator(), false);
-    defer v.deinit();
+    const alloc = arena.allocator();
+    var v = Validator.init(false);
+    defer v.deinit(alloc);
 
     var in: [0]ValType = [_]ValType{} ** 0;
     var out: [1]ValType = [_]ValType{.F64} ** 1;
-    _ = try v.pushControlFrame(.block, in[0..], out[0..]);
-    _ = try v.validate(.@"f64.const");
-    _ = try v.validate(.@"f64.const");
-    _ = try v.validate(.@"f64.add");
-    _ = try v.validate(.end);
+    _ = try v.pushControlFrame(alloc, .block, in[0..], out[0..]);
+    _ = try v.validate(alloc, .@"f64.const");
+    _ = try v.validate(alloc, .@"f64.const");
+    _ = try v.validate(alloc, .@"f64.add");
+    _ = try v.validate(alloc, .end);
 }
 
 test "validate: add error on mismatched types" {
     const ArenaAllocator = std.heap.ArenaAllocator;
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var v = Validator.init(arena.allocator(), false);
-    defer v.deinit();
+    const alloc = arena.allocator();
+    var v = Validator.init(false);
+    defer v.deinit(alloc);
 
     var in: [0]ValType = [_]ValType{} ** 0;
     var out: [1]ValType = [_]ValType{.I32} ** 1;
-    _ = try v.pushControlFrame(.block, in[0..], out[0..]);
-    _ = try v.validate(.@"i64.const");
-    _ = try v.validate(.@"i32.const");
-    _ = v.validate(.@"i32.add") catch |err| {
+    _ = try v.pushControlFrame(alloc, .block, in[0..], out[0..]);
+    _ = try v.validate(alloc, .@"i64.const");
+    _ = try v.validate(alloc, .@"i32.const");
+    _ = v.validate(alloc, .@"i32.add") catch |err| {
         if (err == error.MismatchedTypes) return;
     };
     return error.ExpectedFailure;

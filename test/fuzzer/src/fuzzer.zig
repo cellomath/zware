@@ -4,7 +4,7 @@ const fs = std.fs;
 const fmt = std.fmt;
 const process = std.process;
 const zware = @import("zware");
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Module = zware.Module;
 const Store = zware.Store;
 const Instance = zware.Instance;
@@ -29,8 +29,8 @@ pub fn main() !void {
     defer _ = name_arena.deinit();
     const name_alloc = name_arena.allocator();
 
-    var wasm_files = ArrayList([]const u8).init(gpa.allocator());
-    defer wasm_files.deinit();
+    var wasm_files = ArrayListUnmanaged([]const u8).empty;
+    defer wasm_files.deinit(gpa.allocator());
 
     var dir = try std.fs.cwd().openIterableDir(directory, .{});
     defer dir.close();
@@ -43,7 +43,7 @@ pub fn main() !void {
         if (mem.endsWith(u8, entry.name, ".wasm")) {
             const s = try name_alloc.alloc(u8, entry.name.len);
             mem.copy(u8, s, entry.name);
-            try wasm_files.append(s);
+            try wasm_files.append(gpa.allocator(), s);
         }
     }
 
@@ -86,13 +86,13 @@ pub fn main() !void {
         fuzzed_name = try fmt.allocPrint(name_alloc, "{}_{}.{s}", .{ byte_to_change, bit_to_change, wasm_file });
         defer name_alloc.free(fuzzed_name);
 
-        var store: Store = Store.init(alloc);
+        var store: Store = Store.init();
 
-        var module = Module.init(alloc, program);
-        module.decode() catch continue;
+        var module = Module.init(program);
+        module.decode(alloc) catch continue;
 
-        var instance = Instance.init(alloc, &store, module);
-        instance.instantiate() catch continue;
+        var instance = Instance.init(&store, module);
+        instance.instantiate(alloc) catch continue;
     }
 }
 
