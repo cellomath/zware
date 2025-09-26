@@ -3,7 +3,7 @@ const mem = std.mem;
 const leb = std.leb;
 const math = std.math;
 const unicode = std.unicode;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Rr = @import("rr.zig").Rr;
 const RrOpcode = @import("rr.zig").RrOpcode;
 const Instance = @import("instance.zig").Instance;
@@ -83,14 +83,13 @@ pub const Module = struct {
     pub fn decode(self: *Module) !void {
         if (self.decoded) return error.AlreadyDecoded;
         var decoder = Decoder{
-            .fbs = .{ .pos = 0, .buffer = self.wasm_bin },
+            .fbs = .fixed(self.wasm_bin),
         };
-        const rd = decoder.fbs.reader();
-
-        const magic = try rd.readBytesNoEof(4);
+        var magic: [4]u8 = undefined;
+        try decoder.fbs.readSliceAll(&magic);
         if (!mem.eql(u8, magic[0..], "\x00asm")) return error.MagicNumberNotFound;
 
-        const version = try rd.readInt(u32, .little);
+        const version = try decoder.fbs.takeInt(u32, .little);
         if (version != 1) return error.UnknownBinaryVersion;
 
         // FIXME: in hindsight I don't like this:
@@ -148,7 +147,7 @@ pub const Module = struct {
 };
 
 pub const Decoder = struct {
-    fbs: std.io.FixedBufferStream([]const u8),
+    fbs: std.Io.Reader,
 
     pub fn decodeSection(self: *Decoder, module: *Module) !void {
         const id: SectionType = self.readEnum(SectionType) catch |err| switch (err) {
@@ -158,7 +157,7 @@ pub const Decoder = struct {
 
         const size = try self.readLEB128(u32);
 
-        const section_start = self.fbs.pos;
+        const section_start = self.fbs.seek;
 
         switch (id) {
             .Custom => try self.decodeCustomSection(module, size),
@@ -176,7 +175,7 @@ pub const Decoder = struct {
             .DataCount => try self.decodeDataCountSection(module, size),
         }
 
-        const section_end = self.fbs.pos;
+        const section_end = self.fbs.seek;
         if (section_end - section_start != size) return error.MalformedSectionMismatchedSize;
     }
 
@@ -190,24 +189,24 @@ pub const Decoder = struct {
             if (tag != 0x60) return error.ExpectedFuncTypeTag;
 
             const param_count = try self.readLEB128(u32);
-            const params_start = self.fbs.pos;
+            const params_start = self.fbs.seek;
             {
                 var i: usize = 0;
                 while (i < param_count) : (i += 1) {
                     _ = try self.readEnum(ValType);
                 }
             }
-            const params_end = self.fbs.pos;
+            const params_end = self.fbs.seek;
 
             const results_count = try self.readLEB128(u32);
-            const results_start = self.fbs.pos;
+            const results_start = self.fbs.seek;
             {
                 var i: usize = 0;
                 while (i < results_count) : (i += 1) {
                     _ = try self.readEnum(ValType);
                 }
             }
-            const results_end = self.fbs.pos;
+            const results_end = self.fbs.seek;
 
             const params = module.wasm_bin[params_start..params_end];
             const results = module.wasm_bin[results_start..results_end];
@@ -763,14 +762,14 @@ pub const Decoder = struct {
     }
 
     fn decodeCustomSection(self: *Decoder, module: *Module, size: u32) !void {
-        const offset = self.fbs.pos;
+        const offset = self.fbs.seek;
 
         const name_length = try self.readLEB128(u32);
         const name = try self.readSlice(name_length);
 
         if (!unicode.utf8ValidateSlice(name)) return error.NameNotUTF8;
 
-        const data_length = try math.sub(usize, size, (self.fbs.pos - offset));
+        const data_length = try math.sub(usize, size, (self.fbs.seek - offset));
         const data = try self.readSlice(data_length);
 
         try module.customs.list.append(Custom{
@@ -780,8 +779,7 @@ pub const Decoder = struct {
     }
 
     pub fn readConstantExpression(self: *Decoder, module: *Module, valtype: ValType) !Parsed {
-        const rd = self.fbs.reader();
-        const code = module.wasm_bin[rd.context.pos..];
+        const code = module.wasm_bin[self.fbs.seek..];
 
         var parser = Parser.init(module, self);
         defer parser.deinit();
@@ -790,7 +788,7 @@ pub const Decoder = struct {
     }
 
     pub fn readFunction(self: *Decoder, module: *Module, locals: []LocalType, funcidx: usize) !Parsed {
-        const code = module.wasm_bin[self.fbs.pos..];
+        const code = module.wasm_bin[self.fbs.seek..];
 
         var parser = Parser.init(module, self);
         defer parser.deinit();
@@ -799,28 +797,30 @@ pub const Decoder = struct {
     }
 
     fn readByte(self: *Decoder) !u8 {
-        return self.fbs.reader().readByte();
+        return self.fbs.takeByte();
     }
 
     fn readEnum(self: *Decoder, comptime T: type) !T {
-        return self.fbs.reader().readEnum(T, .little);
+        return self.fbs.takeEnum(T, .little);
     }
 
     fn readLEB128(self: *Decoder, comptime T: type) !T {
-        const readFn = switch (@typeInfo(T).int.signedness) {
-            .signed => std.leb.readILEB128,
-            .unsigned => std.leb.readULEB128,
-        };
-        return readFn(T, self.fbs.reader());
+        const start = self.fbs.seek;
+        const val = try self.fbs.takeLeb128(T);
+        const max_bytes = (@typeInfo(T).int.bits + 6) / 7;
+        if (self.fbs.seek - start > max_bytes) {
+            return error.Overflow;
+        }
+        return val;
     }
 
     pub fn readSlice(self: *Decoder, count: usize) ![]const u8 {
-        const start = self.fbs.pos;
-        const end = self.fbs.pos + count;
+        const start = self.fbs.seek;
+        const end = self.fbs.seek + count;
         if (end > self.fbs.buffer.len)
             return error.EndOfStream;
-        self.fbs.pos = end;
-        return self.fbs.buffer[start..self.fbs.pos];
+        self.fbs.seek = end;
+        return self.fbs.buffer[start..self.fbs.seek];
     }
 };
 

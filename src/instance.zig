@@ -3,7 +3,7 @@ const mem = std.mem;
 const math = std.math;
 const posix = std.posix;
 const wasi = std.os.wasi;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Error = @import("error.zig").Error;
 const Module = @import("module.zig").Module;
 const Store = @import("store.zig").ArrayListStore;
@@ -56,7 +56,7 @@ pub const Instance = struct {
     // it executes; an arbitrary `inst` will not contain the correct
     // data.
     wasi_preopens: std.AutoHashMap(wasi.fd_t, WasiPreopen),
-    wasi_args: std.ArrayList([:0]u8),
+    wasi_args: ArrayList([:0]u8),
     wasi_env: std.StringHashMap([]const u8),
 
     pub fn init(alloc: mem.Allocator, store: *Store, module: Module) Instance {

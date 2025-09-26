@@ -18,7 +18,7 @@ const global = struct {
         //.verbose_log = true,
     }){} else std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const alloc = allocator_instance.allocator();
-    var import_stubs: std.ArrayListUnmanaged(ImportStub) = .{};
+    var import_stubs = std.array_list.Aligned(ImportStub, null).empty;
 };
 
 pub fn main() !void {
@@ -36,7 +36,8 @@ fn main2() !void {
     const full_cmdline = try std.process.argsAlloc(global.alloc);
     defer std.process.argsFree(global.alloc, full_cmdline);
     if (full_cmdline.len <= 1) {
-        try std.io.getStdErr().writer().writeAll("Usage: zware-run FILE.wasm FUNCTION\n");
+        var stderr = std.fs.File.stderr().writer(&.{});
+        try stderr.interface.print("Usage: zware-run FILE.wasm FUNCTION\n", .{});
         std.process.exit(0xff);
     }
 
@@ -57,7 +58,8 @@ fn main2() !void {
             std.process.exit(0xff);
         };
         defer file.close();
-        break :content_blk try file.readToEndAlloc(global.alloc, std.math.maxInt(usize));
+        var reader = file.reader(&.{});
+        break :content_blk try reader.interface.allocRemaining(global.alloc, .unlimited);
     };
     defer global.alloc.free(wasm_content);
 
@@ -81,7 +83,7 @@ fn main2() !void {
     var zware_error: zware.Error = undefined;
     instance.instantiateWithError(&zware_error) catch |err| switch (err) {
         error.SeeContext => {
-            std.log.err("failed to instantiate the module: {}", .{zware_error});
+            std.log.err("failed to instantiate the module: {f}", .{zware_error});
             std.process.exit(0xff);
         },
         else => |e| return e,
@@ -94,14 +96,17 @@ fn main2() !void {
     try instance.invoke(wasm_func_name, &in, out_args, .{});
     std.log.info("{} output(s)", .{out_args.len});
     for (out_args, 0..) |out_arg, out_index| {
-        std.log.info("output {} {}", .{ out_index, fmtValue(export_functype.results[out_index], out_arg) });
+        std.log.info("output {} {f}", .{ out_index, fmtValue(export_functype.results[out_index], out_arg) });
     }
 }
 
 fn getExportFunction(module: *const zware.Module, func_name: []const u8) !usize {
     return module.getExport(.Func, func_name) catch |err| switch (err) {
         error.ExportNotFound => {
-            const stderr = std.io.getStdErr().writer();
+            var buff: [1024]u8 = undefined;
+            var writer = std.fs.File.stderr().writer(&buff);
+            const stderr = &writer.interface;
+
             var export_func_count: usize = 0;
             for (module.exports.list.items) |exp| {
                 if (exp.tag == .Func) {
@@ -121,6 +126,7 @@ fn getExportFunction(module: *const zware.Module, func_name: []const u8) !usize 
                     }
                 }
             }
+            try stderr.flush();
             std.process.exit(0xff);
         },
     };
@@ -176,10 +182,10 @@ fn onMissingImport(vm: *zware.VirtualMachine, context: usize) zware.WasmError!vo
     std.log.info("import function '{s}.{s}' called", .{ stub.module, stub.name });
     for (stub.type.params, 0..) |param_type, i| {
         const value = vm.popAnyOperand();
-        std.log.info("    param {} {}", .{ i, fmtValue(param_type, value) });
+        std.log.info("    param {} {f}", .{ i, fmtValue(param_type, value) });
     }
     for (stub.type.results, 0..) |result_type, i| {
-        std.log.info("    result {} {}", .{ i, fmtValue(result_type, 0) });
+        std.log.info("    result {} {f}", .{ i, fmtValue(result_type, 0) });
         try vm.pushOperand(u64, 0);
     }
 }
@@ -216,12 +222,8 @@ const FmtValue = struct {
     value: u64,
     pub fn format(
         self: FmtValue,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         switch (self.type) {
             inline else => |t2| try writer.print("({s}) {}", .{ @tagName(t2), cast(t2, self.value) }),
         }

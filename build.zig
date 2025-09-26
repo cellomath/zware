@@ -6,21 +6,21 @@ pub fn build(b: *Build) !void {
 
     const zware_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
     try b.modules.put(b.dupe("zware"), zware_module);
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "zware",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = zware_module,
+        .linkage = .static,
     });
     b.installArtifact(lib);
 
     const main_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .optimize = optimize,
+        .root_module = zware_module,
     });
 
     const run_main_tests = b.addRunArtifact(main_tests);
@@ -29,13 +29,17 @@ pub fn build(b: *Build) !void {
 
     const wast2json = addWast2Json(b);
 
-    const testrunner = b.addExecutable(.{
-        .name = "testrunner",
-        .root_source_file = b.path("test/testrunner/src/testrunner.zig"),
+    const testrunner_module = b.addModule("testrunner", .{
         .target = target,
         .optimize = optimize,
+        .root_source_file = b.path("test/testrunner/src/testrunner.zig"),
     });
-    testrunner.root_module.addImport("zware", zware_module);
+    testrunner_module.addImport("zware", zware_module);
+
+    const testrunner = b.addExecutable(.{
+        .name = "testrunner",
+        .root_module = testrunner_module,
+    });
 
     const testsuite_dep = b.dependency("testsuite", .{});
 
@@ -59,13 +63,16 @@ pub fn build(b: *Build) !void {
     test_step.dependOn(testsuite_step);
 
     {
-        const exe = b.addExecutable(.{
-            .name = "zware-run",
+        const module = b.addModule("zware-run", .{
             .root_source_file = b.path("tools/zware-run.zig"),
             .target = target,
             .optimize = optimize,
         });
-        exe.root_module.addImport("zware", zware_module);
+        module.addImport("zware", zware_module);
+        const exe = b.addExecutable(.{
+            .name = "zware-run",
+            .root_module = module,
+        });
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);
         const run = b.addRunArtifact(exe);
@@ -77,13 +84,16 @@ pub fn build(b: *Build) !void {
     }
 
     {
-        const exe = b.addExecutable(.{
-            .name = "zware-gen",
+        const module = b.addModule("zware-run", .{
             .root_source_file = b.path("tools/zware-gen.zig"),
             .target = target,
             .optimize = optimize,
         });
-        exe.root_module.addImport("zware", zware_module);
+        module.addImport("zware", zware_module);
+        const exe = b.addExecutable(.{
+            .name = "zware-gen",
+            .root_module = module,
+        });
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);
         const run = b.addRunArtifact(exe);
@@ -97,6 +107,12 @@ pub fn build(b: *Build) !void {
 
 fn addWast2Json(b: *Build) *Build.Step.Compile {
     const wabt_dep = b.dependency("wabt", .{});
+
+    const wabt_module = b.addModule("wabt", .{
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .link_libcpp = true,
+    });
 
     const wabt_debug = b.option(enum {
         debug,
@@ -115,31 +131,33 @@ fn addWast2Json(b: *Build) *Build.Step.Compile {
         .COMPILER_IS_CLANG = 1,
         .SIZEOF_SIZE_T = @sizeOf(usize),
     });
-
-    const wabt_lib = b.addStaticLibrary(.{
-        .name = "wabt",
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
-    wabt_lib.addConfigHeader(wabt_config_h);
-    wabt_lib.addIncludePath(wabt_dep.path("include"));
-    wabt_lib.addCSourceFiles(.{
+    wabt_module.addConfigHeader(wabt_config_h);
+    wabt_module.addIncludePath(wabt_dep.path("include"));
+    wabt_module.addCSourceFiles(.{
         .root = wabt_dep.path("."),
         .files = &wabt_files,
     });
-    wabt_lib.linkLibCpp();
+    const wabt_lib = b.addLibrary(.{
+        .name = "wabt",
+        .linkage = .static,
+        .root_module = wabt_module,
+    });
+
+    const wast2json_module = b.addModule("wast2json", .{
+        .target = b.graph.host,
+        .link_libcpp = true,
+    });
+    wast2json_module.addConfigHeader(wabt_config_h);
+    wast2json_module.addIncludePath(wabt_dep.path("include"));
+    wast2json_module.addCSourceFile(.{
+        .file = wabt_dep.path("src/tools/wast2json.cc"),
+    });
+    wast2json_module.linkLibrary(wabt_lib);
 
     const wast2json = b.addExecutable(.{
         .name = "wast2json",
-        .target = b.graph.host,
+        .root_module = wast2json_module,
     });
-    wast2json.addConfigHeader(wabt_config_h);
-    wast2json.addIncludePath(wabt_dep.path("include"));
-    wast2json.addCSourceFile(.{
-        .file = wabt_dep.path("src/tools/wast2json.cc"),
-    });
-    wast2json.linkLibCpp();
-    wast2json.linkLibrary(wabt_lib);
     return wast2json;
 }
 

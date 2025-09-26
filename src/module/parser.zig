@@ -1,7 +1,7 @@
 const std = @import("std");
 const math = std.math;
 const leb = std.leb;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Module = @import("../module.zig").Module;
 const Decoder = @import("../module.zig").Decoder;
 const LocalType = @import("../module.zig").LocalType;
@@ -1186,59 +1186,42 @@ pub const Parser = struct {
     }
 
     pub fn readLEB128Mem(self: *Parser, comptime T: type) !T {
-        var buf = std.io.fixedBufferStream(self.code);
+        var buf = std.Io.Reader.fixed(self.code);
 
-        const readFn = switch (@typeInfo(T).int.signedness) {
-            .signed => std.leb.readILEB128,
-            .unsigned => std.leb.readULEB128,
-        };
-        const value = try readFn(T, buf.reader());
-
-        if (@typeInfo(T).int.signedness == .signed) {
-            // The following is a bit of a kludge that should really
-            // be fixed in either the std lib readILEB128 or using a
-            // a fresh implementation. The issue is that the wasm spec
-            // expects the "unused" bits in a negative ILEB128 to all be
-            // one and the same bits in a positive ILEB128 to be zero.
-            switch (T) {
-                i32 => if (buf.pos == 5 and value < 0 and buf.buffer[4] & 0x70 != 0x70) return error.Overflow,
-                i64 => if (buf.pos == 10 and value < 0 and buf.buffer[9] & 0x7e != 0x7e) return error.Overflow,
-                else => @compileError("self.readLEB128Mem expects an unsigned type, i32 or i64"),
-            }
+        const value = try buf.takeLeb128(T);
+        const max_bytes = (@typeInfo(T).int.bits + 6) / 7;
+        if (buf.seek > max_bytes) {
+            return error.Overflow;
         }
-
-        self.code.ptr += buf.pos;
-        self.code.len -= buf.pos;
+        self.code.ptr += buf.seek;
+        self.code.len -= buf.seek;
         return value;
     }
 
     pub fn readU32(self: *Parser) !u32 {
-        var buf = std.io.fixedBufferStream(self.code);
-        const rd = buf.reader();
-        const value = try rd.readInt(u32, .little);
+        var buf = std.Io.Reader.fixed(self.code);
+        const value = try buf.takeInt(u32, .little);
 
-        self.code.ptr += buf.pos;
-        self.code.len -= buf.pos;
+        self.code.ptr += buf.seek;
+        self.code.len -= buf.seek;
         return value;
     }
 
     pub fn readU64(self: *Parser) !u64 {
-        var buf = std.io.fixedBufferStream(self.code);
-        const rd = buf.reader();
-        const value = try rd.readInt(u64, .little);
+        var buf = std.Io.Reader.fixed(self.code);
+        const value = try buf.takeInt(u64, .little);
 
-        self.code.ptr += buf.pos;
-        self.code.len -= buf.pos;
+        self.code.ptr += buf.seek;
+        self.code.len -= buf.seek;
         return value;
     }
 
     pub fn readByte(self: *Parser) !u8 {
-        var buf = std.io.fixedBufferStream(self.code);
-        const rd = buf.reader();
-        const value = try rd.readByte();
+        var buf = std.Io.Reader.fixed(self.code);
+        const value = try buf.takeByte();
 
-        self.code.ptr += buf.pos;
-        self.code.len -= buf.pos;
+        self.code.ptr += buf.seek;
+        self.code.len -= buf.seek;
         return value;
     }
 };

@@ -4,7 +4,7 @@ const posix = std.posix;
 const mem = std.mem;
 const math = std.math;
 const wasi = std.os.wasi;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Module = @import("../module.zig").Module;
 const ValType = @import("../module.zig").ValType;
 const Instance = @import("../instance.zig").Instance;
@@ -53,7 +53,7 @@ pub const VirtualMachine = struct {
     // instead pointers. These will point to the Instance
     // that initialises the VirtualMachine
     wasi_preopens: *std.AutoHashMap(wasi.fd_t, WasiPreopen),
-    wasi_args: *std.ArrayList([:0]u8),
+    wasi_args: *ArrayList([:0]u8),
     wasi_env: *std.StringHashMap([]const u8),
 
     pub const Frame = struct {

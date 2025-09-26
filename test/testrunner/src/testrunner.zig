@@ -17,7 +17,7 @@ const VirtualMachine = zware.VirtualMachine;
 const GeneralPurposeAllocator = std.heap.GeneralPurposeAllocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const StringHashMap = std.hash_map.StringHashMap;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const WasmError = zware.WasmError;
 
 // testrunner
@@ -86,7 +86,7 @@ pub fn main() anyerror!void {
     const alloc = arena.allocator();
 
     // 2. Parse json and find .wasm file
-    const json_string = try fs.cwd().readFileAlloc(alloc, filename, 0xFFFFFFF);
+    const json_string = try fs.cwd().readFileAlloc(filename, alloc, .limited(0xFFFFFFF));
 
     const dynamic_tree = try std.json.parseFromSliceLeaky(std.json.Value, alloc, json_string, .{});
     const r = try std.json.parseFromValueLeaky(Wast, alloc, dynamic_tree, .{});
@@ -130,7 +130,7 @@ pub fn main() anyerror!void {
                 wasm_filename = command.module.filename;
 
                 std.debug.print("(module): {s}:{} ({s})\n", .{ r.source_filename, command.module.line, wasm_filename });
-                program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
+                program = try fs.cwd().readFileAlloc(wasm_filename, alloc, .limited(0xFFFFFFF));
 
                 errdefer {
                     std.debug.print("(module): {s} at {}:{s}\n", .{ r.source_filename, command.module.line, wasm_filename });
@@ -405,7 +405,7 @@ pub fn main() anyerror!void {
                 wasm_filename = command.assert_invalid.filename;
                 std.debug.print("(invalid): {s}:{} ({s})\n", .{ r.source_filename, command.assert_invalid.line, wasm_filename });
 
-                program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
+                program = try fs.cwd().readFileAlloc(wasm_filename, alloc, .limited(0xFFFFFFF));
                 module = Module.init(alloc, program);
 
                 errdefer {
@@ -469,7 +469,7 @@ pub fn main() anyerror!void {
                 if (mem.endsWith(u8, command.assert_malformed.filename, ".wat")) continue;
                 wasm_filename = command.assert_malformed.filename;
                 std.debug.print("(malformed): {s}:{} ({s})\n", .{ r.source_filename, command.assert_malformed.line, wasm_filename });
-                program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
+                program = try fs.cwd().readFileAlloc(wasm_filename, alloc, .limited(0xFFFFFFF));
                 module = Module.init(alloc, program);
 
                 const trap = command.assert_malformed.text;
@@ -502,7 +502,7 @@ pub fn main() anyerror!void {
 
                     if (mem.eql(u8, trap, "malformed reference type")) {
                         switch (err) {
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             else => {},
                         }
                     }
@@ -523,7 +523,7 @@ pub fn main() anyerror!void {
 
                     if (mem.eql(u8, trap, "malformed section id")) {
                         switch (err) {
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             else => {},
                         }
                     }
@@ -544,7 +544,7 @@ pub fn main() anyerror!void {
 
                     if (mem.eql(u8, trap, "integer representation too long")) {
                         switch (err) {
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             error.ExpectedFuncTypeTag => continue,
                             error.Overflow => continue,
                             else => {},
@@ -584,7 +584,7 @@ pub fn main() anyerror!void {
                             error.FunctionsCountMismatch => continue,
                             error.CodesCountMismatch => continue,
                             error.DatasCountMismatch => continue,
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             error.MalformedSectionMismatchedSize => continue,
                             error.ContinuationStackUnderflow => continue,
                             error.CouldntFindEnd => continue,
@@ -594,7 +594,7 @@ pub fn main() anyerror!void {
 
                     if (mem.eql(u8, trap, "malformed import kind")) {
                         switch (err) {
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             else => {},
                         }
                     }
@@ -602,7 +602,7 @@ pub fn main() anyerror!void {
                     if (mem.eql(u8, trap, "integer too large")) {
                         switch (err) {
                             error.Overflow => continue,
-                            error.InvalidValue => continue, // test/testsuite/binary.wast:601 I think the test is wrong
+                            error.InvalidEnumTag => continue, // test/testsuite/binary.wast:601 I think the test is wrong
                             else => {},
                         }
                     }
@@ -616,7 +616,7 @@ pub fn main() anyerror!void {
 
                     if (mem.eql(u8, trap, "malformed mutability")) {
                         switch (err) {
-                            error.InvalidValue => continue,
+                            error.InvalidEnumTag => continue,
                             else => {},
                         }
                     }
@@ -666,7 +666,7 @@ pub fn main() anyerror!void {
             .assert_unlinkable => {
                 wasm_filename = command.assert_unlinkable.filename;
                 std.debug.print("(unlinkable): {s}:{} ({s})\n", .{ r.source_filename, command.assert_unlinkable.line, wasm_filename });
-                program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
+                program = try fs.cwd().readFileAlloc(wasm_filename, alloc, .limited(0xFFFFFFF));
 
                 module = Module.init(alloc, program);
                 try module.decode();
@@ -693,7 +693,7 @@ pub fn main() anyerror!void {
             .assert_uninstantiable => {
                 wasm_filename = command.assert_uninstantiable.filename;
                 std.debug.print("(uninstantiable): {s}:{} ({s})\n", .{ r.source_filename, command.assert_uninstantiable.line, wasm_filename });
-                program = try fs.cwd().readFileAlloc(alloc, wasm_filename, 0xFFFFFFF);
+                program = try fs.cwd().readFileAlloc(wasm_filename, alloc, .limited(0xFFFFFFF));
 
                 module = Module.init(alloc, program);
                 try module.decode();

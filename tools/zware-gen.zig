@@ -4,7 +4,7 @@ const fs = std.fs;
 const fmt = std.fmt;
 const process = std.process;
 const zware = @import("zware");
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 const Module = zware.Module;
 const Store = zware.Store;
 const Instance = zware.Instance;
@@ -20,16 +20,16 @@ pub fn main() !void {
     _ = args.skip();
     const filename = args.next() orelse return error.NoFilename;
 
-    const program = try fs.cwd().readFileAlloc(alloc, filename, 0xFFFFFFF);
+    const program = try fs.cwd().readFileAlloc(filename, alloc, std.Io.Limit.limited(0xFFFFFFF));
     defer alloc.free(program);
 
     var module = Module.init(alloc, program);
     defer module.deinit();
     try module.decode();
 
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    var buff: [4096]u8 = undefined;
+    var writer = std.fs.File.stdout().writer(&buff);
+    const stdout = &writer.interface;
 
     try stdout.print("const std = @import(\"std\");\n", .{});
     try stdout.print("const zware = @import(\"zware\");\n\n", .{});
@@ -222,7 +222,7 @@ pub fn main() !void {
     }
     try stdout.print("}};\n\n", .{});
 
-    try bw.flush();
+    try stdout.flush();
 }
 
 fn zigType(v: zware.ValType) []const u8 {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
-const ArrayList = std.ArrayList;
+const ArrayList = std.array_list.Managed;
 
 pub const MAX_PAGES = 64 * 1024;
 pub const PAGE_SIZE = 64 * 1024;
